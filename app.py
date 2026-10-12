@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import math
 import os
 import random
 import string
@@ -14,7 +13,6 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 load_dotenv()
@@ -32,11 +30,14 @@ DATA_DIR.mkdir(exist_ok=True)
 AVAILABLE_FILE = DATA_DIR / "available_4c.txt"
 SEEN_FILE = DATA_DIR / "seen_4c.txt"
 
+# Creamos las carpetas por si no existen
+Path("templates").mkdir(exist_ok=True)
+Path("static").mkdir(exist_ok=True)
+
 LETTERS = string.ascii_lowercase
 DIGITS = string.digits
 
 app = FastAPI(title=APP_NAME)
-app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 
@@ -79,7 +80,6 @@ def load_persistence():
 
 
 def generate_leet_name() -> str:
-    """Genera nombres de 4 caracteres estilo leet (letras + números) de forma totalmente aleatoria."""
     num_digits = random.randint(0, 4)
     num_letters = 4 - num_digits
     chars = []
@@ -274,6 +274,181 @@ async def hunter_loop():
 @app.on_event("startup")
 async def startup():
     load_persistence()
+    # Creamos el HTML si no existe
+    html_path = Path("templates/index.html")
+    if not html_path.exists():
+        html_path.write_text(INDEX_HTML, encoding="utf-8")
+
+
+INDEX_HTML = """<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KERNEL // 4C LEET</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #000; color: #F4F4F7;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  min-height: 100vh; padding: 18px;
+}
+.rail {
+  height: 2px; margin-bottom: 14px;
+  background: linear-gradient(90deg, #FF0033, #8A001C, #000);
+}
+header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.brand { font-weight: 900; letter-spacing: 1.5px; font-size: 15px; }
+.k {
+  display: inline-flex; width: 26px; height: 26px; background: #FF0033;
+  color: #fff; border-radius: 7px; align-items: center; justify-content: center;
+  font-size: 16px; margin-right: 6px;
+}
+.dim { color: #777985; font-weight: 500; }
+.state { font-size: 11px; font-weight: 900; letter-spacing: 1px; color: #FF0033; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 18px; }
+.card {
+  background: #08080B; border: 1px solid #25252D; border-radius: 10px;
+  padding: 14px; text-align: center;
+}
+.card.green .num { color: #4CE0A0; }
+.num { font-size: 22px; font-weight: 800; }
+.lab { font-size: 9px; color: #777985; letter-spacing: 1px; margin-top: 4px; }
+.controls { display: flex; gap: 10px; align-items: center; margin-bottom: 22px; }
+button {
+  border: 1px solid #2A2A34; background: #0A0A0D; color: #E0E0E8;
+  border-radius: 7px; padding: 9px 18px; font-weight: 800; font-size: 11px;
+  cursor: pointer; letter-spacing: .4px;
+}
+button:hover { border-color: #B5002B; }
+button.primary {
+  background: linear-gradient(135deg, #FF1748, #FF0033); border-color: #FF3158; color: #fff;
+}
+button.stop { color: #FF7086; border-color: #601225; background: #150308; }
+button:disabled { opacity: .35; cursor: default; }
+.webhook { margin-left: auto; font-size: 10px; color: #68E5AD; font-weight: 700; }
+.hits h2 { font-size: 10px; letter-spacing: 1.2px; color: #858692; margin-bottom: 10px; }
+#hitlist { list-style: none; max-height: 420px; overflow-y: auto; }
+#hitlist li {
+  display: flex; justify-content: space-between; padding: 9px 12px;
+  background: #060608; border: 1px solid #1B1B22; border-radius: 7px;
+  margin-bottom: 5px; font-family: 'Cascadia Mono', Consolas, monospace;
+}
+.name { color: #4CE0A0; font-weight: 700; }
+.ms { color: #777985; font-size: 11px; }
+@media (max-width: 640px) {
+  .stats { grid-template-columns: 1fr 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="rail"></div>
+<header>
+  <div class="brand"><span class="k">K</span> KERNEL <span class="dim">/ 4C LEET</span></div>
+  <div class="state" id="state">IDLE</div>
+</header>
+
+<section class="stats">
+  <div class="card"><div class="num" id="checked">0</div><div class="lab">CHECKED</div></div>
+  <div class="card green"><div class="num" id="available">0</div><div class="lab">AVAILABLE</div></div>
+  <div class="card"><div class="num" id="interval">—</div><div class="lab">INTERVAL</div></div>
+  <div class="card"><div class="num" id="uptime">00:00</div><div class="lab">UPTIME</div></div>
+</section>
+
+<section class="controls">
+  <button id="start" class="primary">START HUNT ›</button>
+  <button id="stop" class="stop" disabled>STOP</button>
+  <span class="webhook" id="webhook">{{ "WEBHOOK ON" if webhook else "WEBHOOK OFF" }}</span>
+</section>
+
+<section class="hits">
+  <h2>LIVE HITS</h2>
+  <ul id="hitlist"></ul>
+</section>
+
+<script>
+const stateEl = document.getElementById('state');
+const checkedEl = document.getElementById('checked');
+const availableEl = document.getElementById('available');
+const intervalEl = document.getElementById('interval');
+const uptimeEl = document.getElementById('uptime');
+const startBtn = document.getElementById('start');
+const stopBtn = document.getElementById('stop');
+const hitlist = document.getElementById('hitlist');
+
+let startTs = 0;
+
+function fmt(s) {
+  const m = Math.floor(s/60), sec = s%60;
+  return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+}
+
+startBtn.onclick = async () => {
+  await fetch('/api/start', {method:'POST'});
+  startBtn.disabled = true;
+  stopBtn.disabled = false;
+  stateEl.textContent = 'HUNTING';
+  stateEl.style.color = '#4CE0A0';
+  startTs = Date.now();
+};
+
+stopBtn.onclick = async () => {
+  await fetch('/api/stop', {method:'POST'});
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+};
+
+const ws = new WebSocket((location.protocol==='https:'?'wss:':'ws:') + '//' + location.host + '/ws');
+ws.onmessage = (e) => {
+  const d = JSON.parse(e.data);
+  if (d.type === 'hit') {
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="name">${d.username}</span><span class="ms">${d.elapsed_ms} ms</span>`;
+    hitlist.prepend(li);
+    availableEl.textContent = d.available.toLocaleString();
+    checkedEl.textContent = d.checked.toLocaleString();
+  }
+  if (d.type === 'progress' || d.type === 'hello') {
+    checkedEl.textContent = (d.checked||0).toLocaleString();
+    availableEl.textContent = (d.available||0).toLocaleString();
+    if (d.interval) intervalEl.textContent = d.interval + 's';
+    if (d.status) {
+      stateEl.textContent = d.status;
+      stateEl.style.color = d.status==='HUNTING' ? '#4CE0A0' : '#FF0033';
+    }
+    if (d.running !== undefined) {
+      startBtn.disabled = d.running;
+      stopBtn.disabled = !d.running;
+    }
+  }
+  if (d.type === 'status') {
+    stateEl.textContent = d.status;
+    stateEl.style.color = d.status==='HUNTING' ? '#4CE0A0' : '#F5BB58';
+    if (d.status !== 'HUNTING') {
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+    }
+  }
+};
+
+setInterval(() => {
+  if (startTs) uptimeEl.textContent = fmt(Math.floor((Date.now()-startTs)/1000));
+}, 1000);
+
+fetch('/api/status').then(r=>r.json()).then(d=>{
+  checkedEl.textContent = d.checked.toLocaleString();
+  availableEl.textContent = d.available.toLocaleString();
+  stateEl.textContent = d.status;
+  if (d.running) {
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+    startTs = Date.now() - (d.uptime*1000);
+  }
+});
+</script>
+</body>
+</html>
+"""
 
 
 @app.get("/", response_class=HTMLResponse)
