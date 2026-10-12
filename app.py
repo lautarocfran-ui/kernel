@@ -17,7 +17,7 @@ from fastapi.templating import Jinja2Templates
 
 load_dotenv()
 
-APP_NAME = "KERNEL // 4C LEET"
+APP_NAME = "4L Hunter"
 API_URL = "https://auth.roblox.com/v1/usernames/validate"
 
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
@@ -29,7 +29,6 @@ DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 AVAILABLE_FILE = DATA_DIR / "available_4c.txt"
 SEEN_FILE = DATA_DIR / "seen_4c.txt"
-
 Path("templates").mkdir(exist_ok=True)
 
 LETTERS = string.ascii_lowercase
@@ -80,8 +79,7 @@ def load_persistence():
 def generate_leet_name() -> str:
     num_digits = random.randint(0, 4)
     num_letters = 4 - num_digits
-    chars = []
-    chars += [random.choice(LETTERS) for _ in range(num_letters)]
+    chars = [random.choice(LETTERS) for _ in range(num_letters)]
     chars += [random.choice(DIGITS) for _ in range(num_digits)]
     random.shuffle(chars)
     return "".join(chars)
@@ -180,26 +178,41 @@ async def validate(username: str, client: httpx.AsyncClient) -> tuple[str, str, 
     return "ERROR", "retries exhausted", 0.0
 
 
-async def send_webhook(username: str, elapsed: float):
+async def send_webhook(username: str, elapsed: float, test: bool = False):
     if not WEBHOOK_URL:
-        return
-    payload = {
-        "username": "KERNEL // 4C LEET",
-        "allowed_mentions": {"parse": []},
-        "embeds": [{
-            "author": {"name": "KERNEL  /  LIVE 4C LEET"},
-            "title": "✓  USERNAME AVAILABLE",
-            "description": f"`{username}`   ·   `{elapsed*1000:.0f} ms`",
-            "color": 0xFF0033,
-            "footer": {"text": "LIVE ROBLOX VALIDATION  •  AVAILABILITY MAY CHANGE"},
-            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        }],
-    }
+        return False
+    if test:
+        payload = {
+            "username": "4L Hunter",
+            "allowed_mentions": {"parse": []},
+            "embeds": [{
+                "author": {"name": "4L HUNTER  •  SYSTEM"},
+                "title": "⚡  Webhook Test Successful",
+                "description": "Your Discord webhook is connected and working correctly.\n\nThe hunter is ready to notify you the moment a 4-letter username becomes available.",
+                "color": 0xFF0033,
+                "footer": {"text": "4L Hunter  •  Live Validation"},
+                "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            }],
+        }
+    else:
+        payload = {
+            "username": "4L Hunter",
+            "allowed_mentions": {"parse": []},
+            "embeds": [{
+                "author": {"name": "4L HUNTER  •  LIVE HIT"},
+                "title": "✓  USERNAME AVAILABLE",
+                "description": f"**`{username}`**\n\nResponse time: `{elapsed*1000:.0f} ms`",
+                "color": 0xFF0033,
+                "footer": {"text": "4L Hunter  •  Availability may change"},
+                "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            }],
+        }
     try:
         async with httpx.AsyncClient(timeout=8.0) as c:
-            await c.post(WEBHOOK_URL, json=payload)
+            r = await c.post(WEBHOOK_URL, json=payload)
+            return r.status_code in (200, 204)
     except Exception:
-        pass
+        return False
 
 
 async def broadcast(msg: dict):
@@ -258,7 +271,7 @@ async def hunter_loop():
     state.start_time = time.perf_counter()
     state.last_status = "HUNTING"
     async with httpx.AsyncClient(
-        headers={"User-Agent": "Kernel4CWeb/1.0", "Accept": "application/json"},
+        headers={"User-Agent": "4LHunter/1.0", "Accept": "application/json"},
         limits=httpx.Limits(max_connections=WORKERS + 2),
     ) as client:
         tasks = [asyncio.create_task(worker(client)) for _ in range(WORKERS)]
@@ -270,11 +283,11 @@ async def hunter_loop():
 
 
 INDEX_HTML = r"""<!DOCTYPE html>
-<html lang="es">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>KERNEL // 4C LEET</title>
+<title>4L Hunter</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&family=JetBrains+Mono:wght@500;700&display=swap');
 
@@ -285,19 +298,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
     color: #F4F4F7;
     font-family: 'Inter', system-ui, sans-serif;
     min-height: 100vh;
-    padding: 20px;
     overflow-x: hidden;
   }
 
-  body::before {
-    content: '';
+  #bg {
     position: fixed;
     inset: 0;
-    background:
-      radial-gradient(ellipse at 15% 15%, rgba(255,0,51,0.09) 0%, transparent 50%),
-      radial-gradient(ellipse at 85% 85%, rgba(255,0,51,0.05) 0%, transparent 50%);
-    pointer-events: none;
     z-index: 0;
+    pointer-events: none;
   }
 
   .wrap {
@@ -305,19 +313,20 @@ INDEX_HTML = r"""<!DOCTYPE html>
     z-index: 1;
     max-width: 920px;
     margin: 0 auto;
+    padding: 24px 20px;
   }
 
   .rail {
     height: 3px;
     background: linear-gradient(90deg, #FF0033, #FF3355, #8A001C, transparent);
     border-radius: 2px;
-    margin-bottom: 22px;
-    animation: railPulse 3.2s ease-in-out infinite;
+    margin-bottom: 24px;
+    animation: railPulse 3s ease-in-out infinite;
   }
 
   @keyframes railPulse {
-    0%, 100% { opacity: 1; filter: brightness(1); }
-    50% { opacity: 0.55; filter: brightness(1.3); }
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
   }
 
   header {
@@ -330,16 +339,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .brand {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     font-weight: 900;
-    letter-spacing: 1.8px;
-    font-size: 16px;
+    letter-spacing: 2px;
+    font-size: 18px;
   }
 
   .k {
-    width: 34px;
-    height: 34px;
-    background: linear-gradient(135deg, #FF0033, #CC0029);
+    width: 36px;
+    height: 36px;
+    background: linear-gradient(135deg, #FF0033, #B00024);
     color: #fff;
     border-radius: 10px;
     display: flex;
@@ -347,25 +356,26 @@ INDEX_HTML = r"""<!DOCTYPE html>
     justify-content: center;
     font-size: 18px;
     font-weight: 900;
-    box-shadow: 0 0 24px rgba(255,0,51,0.5);
-    animation: kGlow 2.8s ease-in-out infinite;
+    box-shadow: 0 0 28px rgba(255,0,51,0.55);
+    animation: kGlow 2.6s ease-in-out infinite;
   }
 
   @keyframes kGlow {
     0%, 100% { box-shadow: 0 0 18px rgba(255,0,51,0.4); }
-    50% { box-shadow: 0 0 32px rgba(255,0,51,0.7); }
+    50% { box-shadow: 0 0 36px rgba(255,0,51,0.75); }
   }
 
-  .dim { color: #777985; font-weight: 500; letter-spacing: 1px; }
+  .dim { color: #777985; font-weight: 500; letter-spacing: 1.5px; font-size: 14px; }
 
   .state-box {
     display: flex;
     align-items: center;
     gap: 9px;
-    background: #0A0A0D;
+    background: rgba(10,10,13,0.85);
     border: 1px solid #2A2A34;
     border-radius: 22px;
     padding: 7px 16px;
+    backdrop-filter: blur(8px);
   }
 
   .pulse {
@@ -378,19 +388,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
   .pulse.on {
     background: #4CE0A0;
-    animation: pulseAnim 1.35s infinite;
+    animation: pulseAnim 1.3s infinite;
   }
 
   @keyframes pulseAnim {
-    0% { box-shadow: 0 0 0 0 rgba(76,224,160,0.75); }
-    70% { box-shadow: 0 0 0 11px rgba(76,224,160,0); }
+    0% { box-shadow: 0 0 0 0 rgba(76,224,160,0.7); }
+    70% { box-shadow: 0 0 0 12px rgba(76,224,160,0); }
     100% { box-shadow: 0 0 0 0 rgba(76,224,160,0); }
   }
 
   .state {
     font-size: 11px;
     font-weight: 800;
-    letter-spacing: 1.3px;
+    letter-spacing: 1.4px;
     color: #FF0033;
     transition: color 0.3s;
   }
@@ -403,31 +413,31 @@ INDEX_HTML = r"""<!DOCTYPE html>
   }
 
   .card {
-    background: #08080B;
+    background: rgba(8,8,11,0.8);
     border: 1px solid #25252D;
     border-radius: 14px;
     padding: 18px 12px;
     text-align: center;
+    backdrop-filter: blur(6px);
     transition: border-color 0.25s, transform 0.25s, box-shadow 0.25s;
   }
 
   .card:hover {
     border-color: #FF0033;
     transform: translateY(-3px);
-    box-shadow: 0 8px 24px rgba(255,0,51,0.12);
+    box-shadow: 0 10px 30px rgba(255,0,51,0.15);
   }
 
   .card.green { border-color: #1A3A2A; }
   .card.green:hover {
     border-color: #4CE0A0;
-    box-shadow: 0 8px 24px rgba(76,224,160,0.12);
+    box-shadow: 0 10px 30px rgba(76,224,160,0.12);
   }
 
   .num {
     font-size: 26px;
     font-weight: 900;
     font-family: 'JetBrains Mono', monospace;
-    letter-spacing: -0.5px;
   }
 
   .card.green .num { color: #4CE0A0; }
@@ -435,7 +445,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .lab {
     font-size: 10px;
     color: #777985;
-    letter-spacing: 1.4px;
+    letter-spacing: 1.5px;
     margin-top: 6px;
     font-weight: 600;
   }
@@ -450,14 +460,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
   button {
     border: 1px solid #2A2A34;
-    background: #0A0A0D;
+    background: rgba(10,10,13,0.9);
     color: #E0E0E8;
     border-radius: 10px;
     padding: 12px 22px;
     font-weight: 800;
     font-size: 12px;
     cursor: pointer;
-    letter-spacing: 0.6px;
+    letter-spacing: 0.7px;
     transition: all 0.2s;
     font-family: 'Inter', sans-serif;
   }
@@ -467,21 +477,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
     background: #12050A;
   }
 
-  button:disabled {
-    opacity: 0.35;
-    cursor: not-allowed;
-  }
+  button:disabled { opacity: 0.35; cursor: not-allowed; }
 
   button.primary {
     background: linear-gradient(135deg, #FF1748, #FF0033);
     border-color: #FF3158;
     color: #fff;
-    box-shadow: 0 4px 22px rgba(255,0,51,0.4);
+    box-shadow: 0 4px 24px rgba(255,0,51,0.4);
   }
 
   button.primary:hover:not(:disabled) {
-    background: linear-gradient(135deg, #FF3355, #FF1A40);
-    box-shadow: 0 6px 30px rgba(255,0,51,0.55);
+    box-shadow: 0 6px 32px rgba(255,0,51,0.55);
     transform: translateY(-1px);
   }
 
@@ -489,11 +495,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
     color: #FF7086;
     border-color: #601225;
     background: #150308;
-  }
-
-  button.stop:hover:not(:disabled) {
-    border-color: #FF0033;
-    background: #22040C;
   }
 
   button.test {
@@ -547,7 +548,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
   #hitlist {
     list-style: none;
-    max-height: 380px;
+    max-height: 360px;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
@@ -559,15 +560,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
     justify-content: space-between;
     align-items: center;
     padding: 13px 16px;
-    background: #060608;
+    background: rgba(6,6,8,0.85);
     border: 1px solid #1B1B22;
     border-radius: 10px;
     font-family: 'JetBrains Mono', monospace;
     animation: slideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    backdrop-filter: blur(4px);
   }
 
   @keyframes slideIn {
-    from { opacity: 0; transform: translateY(-12px) scale(0.97); }
+    from { opacity: 0; transform: translateY(-12px) scale(0.96); }
     to { opacity: 1; transform: translateY(0) scale(1); }
   }
 
@@ -575,20 +577,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
     color: #4CE0A0;
     font-weight: 700;
     font-size: 15px;
-    letter-spacing: 1.2px;
+    letter-spacing: 1.3px;
   }
 
-  .ms {
-    color: #777985;
-    font-size: 12px;
-  }
+  .ms { color: #777985; font-size: 12px; }
 
   .empty {
     text-align: center;
     padding: 48px 20px;
     color: #555;
     font-size: 13px;
-    letter-spacing: 0.4px;
   }
 
   .toast {
@@ -607,7 +605,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
     z-index: 100;
     pointer-events: none;
-    box-shadow: 0 10px 40px rgba(255,0,51,0.25);
+    box-shadow: 0 12px 40px rgba(255,0,51,0.3);
   }
 
   .toast.show {
@@ -623,13 +621,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
 </style>
 </head>
 <body>
+<canvas id="bg"></canvas>
+
 <div class="wrap">
   <div class="rail"></div>
 
   <header>
     <div class="brand">
-      <span class="k">K</span>
-      KERNEL <span class="dim">/ 4C LEET</span>
+      <span class="k">4L</span>
+      HUNTER
     </div>
     <div class="state-box">
       <div class="pulse" id="pulse"></div>
@@ -640,36 +640,36 @@ INDEX_HTML = r"""<!DOCTYPE html>
   <section class="stats">
     <div class="card">
       <div class="num" id="checked">0</div>
-      <div class="lab">COMPROBADOS</div>
+      <div class="lab">CHECKED</div>
     </div>
     <div class="card green">
       <div class="num" id="available">0</div>
-      <div class="lab">DISPONIBLES</div>
+      <div class="lab">AVAILABLE</div>
     </div>
     <div class="card">
       <div class="num" id="interval">—</div>
-      <div class="lab">INTERVALO</div>
+      <div class="lab">INTERVAL</div>
     </div>
     <div class="card">
       <div class="num" id="uptime">00:00</div>
-      <div class="lab">TIEMPO</div>
+      <div class="lab">UPTIME</div>
     </div>
   </section>
 
   <section class="controls">
-    <button id="start" class="primary">▶  EMPEZAR BÚSQUEDA</button>
-    <button id="stop" class="stop" disabled>■  DETENER</button>
-    <button id="test" class="test">⚡  PROBAR WEBHOOK</button>
-    <span class="webhook" id="webhook">WEBHOOK OFF</span>
+    <button id="start" class="primary">▶  START HUNT</button>
+    <button id="stop" class="stop" disabled>■  STOP</button>
+    <button id="test" class="test">⚡  TEST WEBHOOK</button>
+    <span class="webhook off" id="webhook">WEBHOOK OFF</span>
   </section>
 
   <section class="hits">
     <div class="hits-header">
-      <h2>NOMBRES ENCONTRADOS</h2>
+      <h2>LIVE HITS</h2>
       <span class="hits-count" id="hitsCount">0 hits</span>
     </div>
     <ul id="hitlist">
-      <li class="empty" id="emptyMsg">Todavía no se encontró ningún nombre disponible…</li>
+      <li class="empty" id="emptyMsg">No available usernames found yet…</li>
     </ul>
   </section>
 </div>
@@ -677,6 +677,99 @@ INDEX_HTML = r"""<!DOCTYPE html>
 <div class="toast" id="toast"></div>
 
 <script>
+/* ========== Interactive particle background ========== */
+const canvas = document.getElementById('bg');
+const ctx = canvas.getContext('2d');
+let w, h, particles = [];
+const mouse = { x: null, y: null, radius: 120 };
+
+function resize() {
+  w = canvas.width = window.innerWidth;
+  h = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+window.addEventListener('mousemove', e => {
+  mouse.x = e.clientX;
+  mouse.y = e.clientY;
+});
+window.addEventListener('mouseleave', () => {
+  mouse.x = null;
+  mouse.y = null;
+});
+
+class Particle {
+  constructor() {
+    this.x = Math.random() * w;
+    this.y = Math.random() * h;
+    this.size = Math.random() * 2 + 0.6;
+    this.baseX = this.x;
+    this.baseY = this.y;
+    this.density = Math.random() * 20 + 8;
+    this.vx = (Math.random() - 0.5) * 0.3;
+    this.vy = (Math.random() - 0.5) * 0.3;
+  }
+  draw() {
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 0, 51, 0.55)';
+    ctx.fill();
+  }
+  update() {
+    this.x += this.vx;
+    this.y += this.vy;
+    if (this.x < 0 || this.x > w) this.vx *= -1;
+    if (this.y < 0 || this.y > h) this.vy *= -1;
+
+    if (mouse.x !== null) {
+      const dx = mouse.x - this.x;
+      const dy = mouse.y - this.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < mouse.radius) {
+        const force = (mouse.radius - dist) / mouse.radius;
+        this.x -= (dx / dist) * force * this.density * 0.4;
+        this.y -= (dy / dist) * force * this.density * 0.4;
+      }
+    }
+  }
+}
+
+function initParticles() {
+  particles = [];
+  const count = Math.min(90, Math.floor((w * h) / 14000));
+  for (let i = 0; i < count; i++) particles.push(new Particle());
+}
+initParticles();
+window.addEventListener('resize', initParticles);
+
+function animate() {
+  ctx.clearRect(0, 0, w, h);
+  for (const p of particles) {
+    p.update();
+    p.draw();
+  }
+  // soft connections
+  for (let i = 0; i < particles.length; i++) {
+    for (let j = i + 1; j < particles.length; j++) {
+      const dx = particles[i].x - particles[j].x;
+      const dy = particles[i].y - particles[j].y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 110) {
+        ctx.beginPath();
+        ctx.strokeStyle = `rgba(255, 0, 51, ${0.12 * (1 - dist / 110)})`;
+        ctx.lineWidth = 0.6;
+        ctx.moveTo(particles[i].x, particles[i].y);
+        ctx.lineTo(particles[j].x, particles[j].y);
+        ctx.stroke();
+      }
+    }
+  }
+  requestAnimationFrame(animate);
+}
+animate();
+
+/* ========== App logic ========== */
 const stateEl = document.getElementById('state');
 const pulseEl = document.getElementById('pulse');
 const checkedEl = document.getElementById('checked');
@@ -698,11 +791,11 @@ let hitTotal = 0;
 function showToast(msg) {
   toast.textContent = msg;
   toast.classList.add('show');
-  setTimeout(() => toast.classList.remove('show'), 3000);
+  setTimeout(() => toast.classList.remove('show'), 3200);
 }
 
 function fmt(s) {
-  const m = Math.floor(s/60), sec = s%60;
+  const m = Math.floor(s / 60), sec = s % 60;
   return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
 }
 
@@ -714,41 +807,41 @@ function setRunning(on) {
 }
 
 startBtn.onclick = async () => {
-  const r = await fetch('/api/start', {method:'POST'});
+  const r = await fetch('/api/start', { method: 'POST' });
   if (r.ok) {
     setRunning(true);
     stateEl.textContent = 'HUNTING';
     startTs = Date.now();
-    showToast('Búsqueda iniciada');
+    showToast('Hunt started');
   }
 };
 
 stopBtn.onclick = async () => {
-  await fetch('/api/stop', {method:'POST'});
+  await fetch('/api/stop', { method: 'POST' });
   setRunning(false);
   stateEl.textContent = 'STOPPED';
-  showToast('Búsqueda detenida');
+  showToast('Hunt stopped');
 };
 
 testBtn.onclick = async () => {
   testBtn.disabled = true;
-  testBtn.textContent = 'PROBANDO…';
+  testBtn.textContent = 'SENDING…';
   try {
-    const r = await fetch('/api/status');
+    const r = await fetch('/api/test-webhook', { method: 'POST' });
     const d = await r.json();
-    if (d.webhook_configured) {
-      showToast('✓ Webhook configurado correctamente');
+    if (d.ok) {
+      showToast('✓ Test message sent to Discord');
     } else {
-      showToast('✗ No hay webhook configurado');
+      showToast('✗ ' + (d.msg || 'Webhook failed'));
     }
   } catch {
-    showToast('✗ Error de conexión');
+    showToast('✗ Connection error');
   }
   testBtn.disabled = false;
-  testBtn.textContent = '⚡  PROBAR WEBHOOK';
+  testBtn.textContent = '⚡  TEST WEBHOOK';
 };
 
-const ws = new WebSocket((location.protocol==='https:'?'wss:':'ws:') + '//' + location.host + '/ws');
+const ws = new WebSocket((location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws');
 
 ws.onmessage = (e) => {
   const d = JSON.parse(e.data);
@@ -762,12 +855,12 @@ ws.onmessage = (e) => {
     checkedEl.textContent = d.checked.toLocaleString();
     hitTotal++;
     hitsCount.textContent = hitTotal + ' hits';
-    showToast('¡Nombre disponible: ' + d.username + '!');
+    showToast('Available: ' + d.username);
   }
 
   if (d.type === 'progress' || d.type === 'hello') {
-    checkedEl.textContent = (d.checked||0).toLocaleString();
-    availableEl.textContent = (d.available||0).toLocaleString();
+    checkedEl.textContent = (d.checked || 0).toLocaleString();
+    availableEl.textContent = (d.available || 0).toLocaleString();
     if (d.interval) intervalEl.textContent = d.interval + 's';
     if (d.status) {
       stateEl.textContent = d.status;
@@ -784,10 +877,10 @@ ws.onmessage = (e) => {
 };
 
 setInterval(() => {
-  if (startTs) uptimeEl.textContent = fmt(Math.floor((Date.now()-startTs)/1000));
+  if (startTs) uptimeEl.textContent = fmt(Math.floor((Date.now() - startTs) / 1000));
 }, 1000);
 
-fetch('/api/status').then(r=>r.json()).then(d=>{
+fetch('/api/status').then(r => r.json()).then(d => {
   checkedEl.textContent = d.checked.toLocaleString();
   availableEl.textContent = d.available.toLocaleString();
   stateEl.textContent = d.status;
@@ -800,7 +893,7 @@ fetch('/api/status').then(r=>r.json()).then(d=>{
   }
   if (d.running) {
     setRunning(true);
-    startTs = Date.now() - (d.uptime*1000);
+    startTs = Date.now() - (d.uptime * 1000);
   }
 });
 </script>
@@ -812,8 +905,7 @@ fetch('/api/status').then(r=>r.json()).then(d=>{
 @app.on_event("startup")
 async def startup():
     load_persistence()
-    html_path = Path("templates/index.html")
-    html_path.write_text(INDEX_HTML, encoding="utf-8")
+    Path("templates/index.html").write_text(INDEX_HTML, encoding="utf-8")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -850,7 +942,7 @@ async def api_start():
     state.rate_limited = False
     state.last_status = "HUNTING"
     asyncio.create_task(hunter_loop())
-    return {"ok": True, "msg": "hunt started"}
+    return {"ok": True}
 
 
 @app.post("/api/stop")
@@ -858,6 +950,16 @@ async def api_stop():
     state.running = False
     state.last_status = "STOPPING"
     return {"ok": True}
+
+
+@app.post("/api/test-webhook")
+async def api_test_webhook():
+    if not WEBHOOK_URL:
+        return JSONResponse({"ok": False, "msg": "No webhook configured"}, 400)
+    ok = await send_webhook("test", 0.0, test=True)
+    if ok:
+        return {"ok": True, "msg": "Test sent"}
+    return JSONResponse({"ok": False, "msg": "Failed to send"}, 500)
 
 
 @app.get("/api/hits")
