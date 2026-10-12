@@ -22,8 +22,8 @@ API_URL = "https://auth.roblox.com/v1/usernames/validate"
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
 
 WORKERS = 5
-MIN_INTERVAL = 0.35
-MAX_INTERVAL = 2.2
+MIN_INTERVAL = 0.32
+MAX_INTERVAL = 2.1
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -50,7 +50,7 @@ class State:
         self.seen: set[str] = set()
         self.saved: set[str] = set()
         self._lock = asyncio.Lock()
-        self._interval = 0.42
+        self._interval = 0.40
         self._next_start = 0.0
         self._cooldown_until = 0.0
         self._success_streak = 0
@@ -92,16 +92,22 @@ async def flush_seen():
 
 
 def generate_name() -> str:
-    # mezcla realista de letras + números (estilo 4 letras usable)
-    num_digits = random.randint(0, 3)
-    chars = [random.choice(LETTERS) for _ in range(4 - num_digits)]
-    chars += [random.choice(DIGITS) for _ in range(num_digits)]
+    """Prioriza patrones que suelen quedar libres en Roblox."""
+    roll = random.random()
+    if roll < 0.58:  # 2 letters + 2 digits
+        chars = [random.choice(LETTERS) for _ in range(2)] + [random.choice(DIGITS) for _ in range(2)]
+    elif roll < 0.85:  # 3 letters + 1 digit
+        chars = [random.choice(LETTERS) for _ in range(3)] + [random.choice(DIGITS)]
+    elif roll < 0.96:  # 1 letter + 3 digits
+        chars = [random.choice(LETTERS)] + [random.choice(DIGITS) for _ in range(3)]
+    else:  # 4 digits
+        chars = [random.choice(DIGITS) for _ in range(4)]
     random.shuffle(chars)
     return "".join(chars)
 
 
 def next_name() -> Optional[str]:
-    for _ in range(800):
+    for _ in range(1000):
         name = generate_name()
         if name not in state.seen:
             return name
@@ -115,14 +121,14 @@ async def wait_turn() -> bool:
         if wait <= 0:
             state._next_start = now + state._interval
             return True
-        await asyncio.sleep(min(max(wait, 0.012), 0.18))
+        await asyncio.sleep(min(max(wait, 0.01), 0.16))
     return False
 
 
 def record_success():
     state._success_streak += 1
-    if state._success_streak >= 18:
-        state._interval = max(MIN_INTERVAL, state._interval - 0.03)
+    if state._success_streak >= 16:
+        state._interval = max(MIN_INTERVAL, state._interval - 0.028)
         state._success_streak = 0
         state._recent_429 = 0
 
@@ -130,13 +136,13 @@ def record_success():
 def record_429(retry_after: float) -> bool:
     now = time.monotonic()
     state._success_streak = 0
-    if now - state._last_429 > 70:
+    if now - state._last_429 > 65:
         state._recent_429 = 0
     state._recent_429 += 1
     state._last_429 = now
     if now >= state._cooldown_until:
-        state._interval = min(MAX_INTERVAL, max(0.8, state._interval * 1.75))
-    state._cooldown_until = max(state._cooldown_until, now + max(3.2, retry_after, state._interval * 3))
+        state._interval = min(MAX_INTERVAL, max(0.75, state._interval * 1.8))
+    state._cooldown_until = max(state._cooldown_until, now + max(3.0, retry_after, state._interval * 2.8))
     return state._recent_429 >= 3
 
 
@@ -153,7 +159,7 @@ async def validate(username: str, client: httpx.AsyncClient) -> tuple[str, float
                     "request.birthday": "2000-01-01",
                     "request.context": "Signup",
                 },
-                timeout=4.2,
+                timeout=4.0,
             )
             elapsed = time.perf_counter() - t0
 
@@ -166,7 +172,7 @@ async def validate(username: str, client: httpx.AsyncClient) -> tuple[str, float
                 return "RATE LIMITED", elapsed
 
             if r.status_code in {500, 502, 503, 504} and attempt == 0:
-                await asyncio.sleep(0.45)
+                await asyncio.sleep(0.4)
                 continue
 
             if r.status_code != 200:
@@ -174,13 +180,11 @@ async def validate(username: str, client: httpx.AsyncClient) -> tuple[str, float
 
             code = r.json().get("code")
             record_success()
-            if code == 0:
-                return "AVAILABLE", elapsed
-            return "TAKEN", elapsed
+            return ("AVAILABLE", elapsed) if code == 0 else ("TAKEN", elapsed)
 
         except Exception:
             if attempt == 0:
-                await asyncio.sleep(0.25)
+                await asyncio.sleep(0.22)
                 continue
             return "ERROR", time.perf_counter() - t0
     return "ERROR", 0.0
@@ -255,16 +259,17 @@ async def worker(client: httpx.AsyncClient):
             await broadcast({"type": "status", "status": "RATE LIMITED"})
             break
 
-        if len(state._seen_buffer) >= 50:
+        if len(state._seen_buffer) >= 40:
             await flush_seen()
 
-        if state.checked % 12 == 0:
+        if state.checked % 10 == 0:
             await broadcast({
                 "type": "progress",
                 "checked": state.checked,
                 "available": state.available,
                 "interval": round(state._interval, 3),
                 "status": state.last_status,
+                "seen": len(state.seen),
             })
         await asyncio.sleep(0)
 
@@ -274,7 +279,7 @@ async def hunter_loop():
     state.last_status = "HUNTING"
     state.running = True
     async with httpx.AsyncClient(
-        headers={"User-Agent": "4LHunter/3.0", "Accept": "application/json"},
+        headers={"User-Agent": "4LHunter/4.0", "Accept": "application/json"},
         limits=httpx.Limits(max_connections=WORKERS + 2),
     ) as client:
         await asyncio.gather(*[asyncio.create_task(worker(client)) for _ in range(WORKERS)])
@@ -292,85 +297,229 @@ INDEX_HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>4L Hunter</title>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap');
+
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#000;color:#F0F0F5;font-family:'Space Grotesk',system-ui,sans-serif;min-height:100vh}
-.wrap{max-width:860px;margin:0 auto;padding:28px 20px}
-.rail{height:2px;background:linear-gradient(90deg,#FF0033,#FF2A4F,transparent);margin-bottom:24px}
-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:28px}
-.brand{display:flex;align-items:center;gap:12px;font-weight:700;letter-spacing:1.4px;font-size:18px}
-.logo{width:36px;height:36px;background:linear-gradient(145deg,#FF0033,#C40028);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;box-shadow:0 0 24px rgba(255,0,51,.45)}
-.state-box{display:flex;align-items:center;gap:8px;background:#0C0C10;border:1px solid #2A2A34;border-radius:20px;padding:7px 14px}
-.dot{width:8px;height:8px;border-radius:50%;background:#FF0033}
-.dot.on{background:#4CE0A0;box-shadow:0 0 0 0 rgba(76,224,160,.6);animation:p 1.3s infinite}
-@keyframes p{0%{box-shadow:0 0 0 0 rgba(76,224,160,.6)}70%{box-shadow:0 0 0 10px transparent}}
-.state{font-size:11px;font-weight:600;letter-spacing:1.3px;color:#FF0033}
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:11px;margin-bottom:24px}
-.card{background:#0A0A0E;border:1px solid #22222C;border-radius:12px;padding:16px 10px;text-align:center}
+body{background:#000;color:#F2F2F7;font-family:'Outfit',system-ui,sans-serif;min-height:100vh;overflow-x:hidden}
+#bg{position:fixed;inset:0;z-index:0;pointer-events:none}
+.wrap{position:relative;z-index:1;max-width:880px;margin:0 auto;padding:32px 20px}
+
+.rail{height:2px;background:linear-gradient(90deg,#FF0033,#FF2A4F 40%,transparent);margin-bottom:28px;border-radius:2px;opacity:.9}
+
+header{display:flex;justify-content:space-between;align-items:center;margin-bottom:32px}
+.brand{display:flex;align-items:center;gap:14px;font-weight:700;letter-spacing:1.6px;font-size:20px}
+.logo{width:40px;height:40px;background:linear-gradient(145deg,#FF0033,#B00024);border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;box-shadow:0 0 28px rgba(255,0,51,.5)}
+.state-box{display:flex;align-items:center;gap:10px;background:rgba(12,12,16,.8);border:1px solid #2A2A34;border-radius:24px;padding:8px 16px;backdrop-filter:blur(12px)}
+.dot{width:8px;height:8px;border-radius:50%;background:#FF0033;transition:background .3s}
+.dot.on{background:#4CE0A0;animation:pulse 1.4s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(76,224,160,.65)}70%{box-shadow:0 0 0 11px transparent}100%{box-shadow:0 0 0 0 transparent}}
+.state{font-size:11px;font-weight:600;letter-spacing:1.5px;color:#FF0033}
+
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:28px}
+.card{background:rgba(10,10,14,.75);border:1px solid #22222C;border-radius:14px;padding:18px 12px;text-align:center;backdrop-filter:blur(8px);transition:border-color .25s,transform .25s}
+.card:hover{border-color:#FF0033;transform:translateY(-2px)}
 .card.green{border-color:#1A3328}
-.num{font-size:23px;font-weight:700;font-family:'JetBrains Mono',monospace}
+.card.green:hover{border-color:#4CE0A0}
+.num{font-size:24px;font-weight:700;font-family:'JetBrains Mono',monospace}
 .card.green .num{color:#4CE0A0}
-.lab{font-size:10px;color:#6B6B78;letter-spacing:1.4px;margin-top:4px}
-.controls{display:flex;gap:10px;margin-bottom:26px;flex-wrap:wrap}
-button{border:1px solid #2A2A34;background:#0C0C10;color:#E4E4EC;border-radius:9px;padding:11px 18px;font-weight:600;font-size:12px;cursor:pointer;font-family:'Space Grotesk',sans-serif}
+.lab{font-size:10px;color:#6B6B78;letter-spacing:1.5px;margin-top:5px;font-weight:500}
+
+.controls{display:flex;gap:10px;align-items:center;margin-bottom:28px;flex-wrap:wrap}
+button{border:1px solid #2A2A34;background:rgba(12,12,16,.9);color:#E4E4EC;border-radius:10px;padding:11px 20px;font-weight:600;font-size:12px;cursor:pointer;letter-spacing:.5px;font-family:'Outfit',sans-serif;transition:all .2s}
+button:hover:not(:disabled){border-color:#FF0033;background:#14050A}
 button:disabled{opacity:.35;cursor:not-allowed}
-button.primary{background:linear-gradient(135deg,#FF1748,#FF0033);border-color:#FF3158;color:#fff}
 button.stop{color:#FF7086;border-color:#5A1528;background:#140308}
-.badge{margin-left:auto;font-size:11px;font-weight:600;padding:6px 12px;border-radius:16px;background:#06110C;border:1px solid #2A5141;color:#68E5AD}
+.badge{margin-left:auto;font-size:11px;font-weight:600;letter-spacing:.7px;padding:7px 14px;border-radius:20px;background:#06110C;border:1px solid #2A5141;color:#68E5AD}
 .badge.off{background:#110608;border-color:#4A2020;color:#FF7086}
-.hits h2{font-size:11px;letter-spacing:1.5px;color:#6B6B78;margin-bottom:10px}
-#hitlist{list-style:none;max-height:320px;overflow-y:auto;display:flex;flex-direction:column;gap:6px}
-#hitlist li{display:flex;justify-content:space-between;padding:12px 14px;background:#08080C;border:1px solid #1C1C24;border-radius:9px;font-family:'JetBrains Mono',monospace}
-.name{color:#4CE0A0;font-weight:700;font-size:14px}
+
+.hits-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.hits h2{font-size:11px;letter-spacing:1.8px;color:#6B6B78;font-weight:600}
+.hits-count{font-size:11px;color:#4CE0A0;font-weight:600}
+
+#hitlist{list-style:none;max-height:340px;overflow-y:auto;display:flex;flex-direction:column;gap:6px}
+#hitlist li{display:flex;justify-content:space-between;align-items:center;padding:13px 16px;background:rgba(8,8,12,.85);border:1px solid #1C1C24;border-radius:10px;font-family:'JetBrains Mono',monospace;animation:in .35s cubic-bezier(.16,1,.3,1)}
+@keyframes in{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+.name{color:#4CE0A0;font-weight:700;font-size:14px;letter-spacing:1.1px}
 .ms{color:#6B6B78;font-size:12px}
-.empty{text-align:center;padding:36px;color:#4A4A55;font-size:13px}
-.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(70px);background:#0C0C10;border:1px solid #FF0033;padding:12px 20px;border-radius:10px;font-size:13px;opacity:0;transition:.35s;z-index:50}
+.empty{text-align:center;padding:42px 20px;color:#4A4A55;font-size:13px}
+
+.toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%) translateY(80px);background:#0C0C10;border:1px solid #FF0033;color:#F2F2F7;padding:13px 22px;border-radius:12px;font-size:13px;font-weight:500;opacity:0;transition:all .4s cubic-bezier(.16,1,.3,1);z-index:50;pointer-events:none;box-shadow:0 12px 36px rgba(255,0,51,.25)}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
-@media(max-width:600px){.stats{grid-template-columns:1fr 1fr}}
+
+@media(max-width:640px){.stats{grid-template-columns:1fr 1fr}.controls{flex-direction:column;align-items:stretch}.badge{margin-left:0;text-align:center}}
 </style>
 </head>
 <body>
+<canvas id="bg"></canvas>
 <div class="wrap">
   <div class="rail"></div>
   <header>
     <div class="brand"><div class="logo">4L</div>HUNTER</div>
-    <div class="state-box"><div class="dot" id="dot"></div><div class="state" id="state">IDLE</div></div>
+    <div class="state-box"><div class="dot" id="dot"></div><div class="state" id="state">STARTING</div></div>
   </header>
+
   <section class="stats">
     <div class="card"><div class="num" id="checked">0</div><div class="lab">CHECKED</div></div>
     <div class="card green"><div class="num" id="available">0</div><div class="lab">AVAILABLE</div></div>
     <div class="card"><div class="num" id="interval">—</div><div class="lab">INTERVAL</div></div>
     <div class="card"><div class="num" id="uptime">00:00</div><div class="lab">UPTIME</div></div>
   </section>
+
   <section class="controls">
-    <button id="start" class="primary">▶ START</button>
-    <button id="stop" class="stop" disabled>■ STOP</button>
+    <button id="stop" class="stop">■  STOP</button>
     <span class="badge off" id="badge">WEBHOOK OFF</span>
   </section>
+
   <section class="hits">
-    <h2>LIVE HITS</h2>
+    <div class="hits-header">
+      <h2>LIVE HITS</h2>
+      <span class="hits-count" id="hitsCount">0 hits</span>
+    </div>
     <ul id="hitlist"><li class="empty" id="empty">Waiting for available names…</li></ul>
   </section>
 </div>
 <div class="toast" id="toast"></div>
+
 <script>
-const $=id=>document.getElementById(id);
-const stateEl=$('state'),dot=$('dot'),checkedEl=$('checked'),availableEl=$('available');
-const intervalEl=$('interval'),uptimeEl=$('uptime'),startBtn=$('start'),stopBtn=$('stop');
-const hitlist=$('hitlist'),empty=$('empty'),badge=$('badge'),toast=$('toast');
-let startTs=0;
-function showToast(m){toast.textContent=m;toast.classList.add('show');setTimeout(()=>toast.classList.remove('show'),2800)}
-function fmt(s){return `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`}
-function setRunning(on){startBtn.disabled=on;stopBtn.disabled=!on;dot.classList.toggle('on',on);stateEl.style.color=on?'#4CE0A0':'#FF0033'}
-startBtn.onclick=async()=>{if((await fetch('/api/start',{method:'POST'})).ok){setRunning(true);stateEl.textContent='HUNTING';startTs=Date.now();showToast('Hunt started')}};
-stopBtn.onclick=async()=>{await fetch('/api/stop',{method:'POST'});setRunning(false);stateEl.textContent='STOPPED';showToast('Stopped')};
-const ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/ws');
-ws.onmessage=e=>{const d=JSON.parse(e.data);
-if(d.type==='hit'){if(empty)empty.remove();const li=document.createElement('li');li.innerHTML=`<span class="name">${d.username}</span><span class="ms">${d.elapsed_ms} ms</span>`;hitlist.prepend(li);availableEl.textContent=d.available.toLocaleString();checkedEl.textContent=d.checked.toLocaleString();showToast('Found: '+d.username)}
-if(d.type==='progress'||d.type==='hello'){checkedEl.textContent=(d.checked||0).toLocaleString();availableEl.textContent=(d.available||0).toLocaleString();if(d.interval)intervalEl.textContent=d.interval+'s';if(d.status){stateEl.textContent=d.status;stateEl.style.color=d.status==='HUNTING'?'#4CE0A0':'#FF0033'}if(d.running!==undefined)setRunning(d.running)}
-if(d.type==='status'){stateEl.textContent=d.status;stateEl.style.color=d.status==='HUNTING'?'#4CE0A0':'#F5BB58';if(d.status!=='HUNTING')setRunning(false)}};
-setInterval(()=>{if(startTs)uptimeEl.textContent=fmt(Math.floor((Date.now()-startTs)/1000))},1000);
-fetch('/api/status').then(r=>r.json()).then(d=>{checkedEl.textContent=d.checked.toLocaleString();availableEl.textContent=d.available.toLocaleString();stateEl.textContent=d.status;if(d.webhook_configured){badge.textContent='WEBHOOK ON';badge.classList.remove('off')}else{badge.textContent='WEBHOOK OFF';badge.classList.add('off')}if(d.running){setRunning(true);startTs=Date.now()-d.uptime*1000}});
+/* Interactive grid background */
+const canvas = document.getElementById('bg');
+const ctx = canvas.getContext('2d');
+let w, h, nodes = [], mouse = {x: -9999, y: -9999};
+
+function resize() {
+  w = canvas.width = innerWidth;
+  h = canvas.height = innerHeight;
+  nodes = [];
+  const gap = 52;
+  const cols = Math.ceil(w / gap) + 1;
+  const rows = Math.ceil(h / gap) + 1;
+  for (let y = 0; y < rows; y++)
+    for (let x = 0; x < cols; x++)
+      nodes.push({ ox: x * gap, oy: y * gap, x: x * gap, y: y * gap, phase: Math.random() * Math.PI * 2 });
+}
+addEventListener('resize', resize);
+addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
+addEventListener('mouseleave', () => { mouse.x = -9999; mouse.y = -9999; });
+
+function draw(t) {
+  ctx.clearRect(0, 0, w, h);
+  const time = t * 0.001;
+  for (const n of nodes) {
+    n.x = n.ox + Math.sin(time * 0.65 + n.phase) * 5.5;
+    n.y = n.oy + Math.cos(time * 0.5 + n.phase * 1.2) * 4.5;
+    const dx = n.x - mouse.x, dy = n.y - mouse.y, dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < 130) {
+      const f = (130 - dist) / 130;
+      n.x += (dx / dist) * f * 26;
+      n.y += (dy / dist) * f * 26;
+    }
+  }
+  for (let i = 0; i < nodes.length; i++) {
+    const a = nodes[i];
+    for (let j = i + 1; j < nodes.length; j++) {
+      const b = nodes[j], dx = a.x - b.x, dy = a.y - b.y, d = Math.sqrt(dx * dx + dy * dy);
+      if (d < 68) {
+        ctx.beginPath();
+        ctx.strokeStyle = `rgba(255,0,51,${0.13 * (1 - d / 68)})`;
+        ctx.lineWidth = 0.65;
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
+    }
+  }
+  for (const n of nodes) {
+    const dx = n.x - mouse.x, dy = n.y - mouse.y, dist = Math.sqrt(dx * dx + dy * dy), near = dist < 130;
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, near ? 2.1 : 1.2, 0, Math.PI * 2);
+    ctx.fillStyle = near ? 'rgba(255,40,80,0.9)' : 'rgba(255,0,51,0.32)';
+    ctx.fill();
+  }
+  requestAnimationFrame(draw);
+}
+resize();
+requestAnimationFrame(draw);
+
+/* App */
+const $ = id => document.getElementById(id);
+const stateEl = $('state'), dot = $('dot'), checkedEl = $('checked'), availableEl = $('available');
+const intervalEl = $('interval'), uptimeEl = $('uptime'), stopBtn = $('stop');
+const hitlist = $('hitlist'), empty = $('empty'), hitsCount = $('hitsCount'), badge = $('badge'), toast = $('toast');
+let startTs = 0, hits = 0;
+
+function showToast(m) {
+  toast.textContent = m;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 2800);
+}
+function fmt(s) {
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+}
+function setRunning(on) {
+  stopBtn.disabled = !on;
+  dot.classList.toggle('on', on);
+  stateEl.style.color = on ? '#4CE0A0' : '#FF0033';
+}
+
+stopBtn.onclick = async () => {
+  await fetch('/api/stop', { method: 'POST' });
+  setRunning(false);
+  stateEl.textContent = 'STOPPED';
+  showToast('Hunt stopped');
+};
+
+const ws = new WebSocket((location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws');
+ws.onmessage = e => {
+  const d = JSON.parse(e.data);
+  if (d.type === 'hit') {
+    if (empty) empty.remove();
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="name">${d.username}</span><span class="ms">${d.elapsed_ms} ms</span>`;
+    hitlist.prepend(li);
+    availableEl.textContent = d.available.toLocaleString();
+    checkedEl.textContent = d.checked.toLocaleString();
+    hits++;
+    hitsCount.textContent = hits + ' hits';
+    showToast('Found: ' + d.username);
+  }
+  if (d.type === 'progress' || d.type === 'hello') {
+    checkedEl.textContent = (d.checked || 0).toLocaleString();
+    availableEl.textContent = (d.available || 0).toLocaleString();
+    if (d.interval) intervalEl.textContent = d.interval + 's';
+    if (d.status) {
+      stateEl.textContent = d.status;
+      stateEl.style.color = d.status === 'HUNTING' ? '#4CE0A0' : '#FF0033';
+    }
+    if (d.running !== undefined) setRunning(d.running);
+  }
+  if (d.type === 'status') {
+    stateEl.textContent = d.status;
+    stateEl.style.color = d.status === 'HUNTING' ? '#4CE0A0' : '#F5BB58';
+    if (d.status !== 'HUNTING') setRunning(false);
+  }
+};
+
+setInterval(() => {
+  if (startTs) uptimeEl.textContent = fmt(Math.floor((Date.now() - startTs) / 1000));
+}, 1000);
+
+fetch('/api/status').then(r => r.json()).then(d => {
+  checkedEl.textContent = d.checked.toLocaleString();
+  availableEl.textContent = d.available.toLocaleString();
+  stateEl.textContent = d.status;
+  if (d.webhook_configured) {
+    badge.textContent = 'WEBHOOK ON';
+    badge.classList.remove('off');
+  } else {
+    badge.textContent = 'WEBHOOK OFF';
+    badge.classList.add('off');
+  }
+  if (d.running) {
+    setRunning(true);
+    startTs = Date.now() - (d.uptime * 1000);
+    stateEl.textContent = 'HUNTING';
+  }
+});
 </script>
 </body>
 </html>
@@ -381,7 +530,7 @@ fetch('/api/status').then(r=>r.json()).then(d=>{checkedEl.textContent=d.checked.
 async def startup():
     load_persistence()
     Path("templates/index.html").write_text(INDEX_HTML, encoding="utf-8")
-    # Auto-start: empieza a buscar solo al levantar el servicio
+    # Auto-start on deploy
     if not state.running:
         state.running = True
         state.last_status = "HUNTING"
@@ -407,16 +556,6 @@ async def api_status():
         "webhook_configured": bool(WEBHOOK_URL),
         "seen": len(state.seen),
     }
-
-
-@app.post("/api/start")
-async def api_start():
-    if state.running:
-        return JSONResponse({"ok": False}, 400)
-    state.running = True
-    state.last_status = "HUNTING"
-    asyncio.create_task(hunter_loop())
-    return {"ok": True}
 
 
 @app.post("/api/stop")
