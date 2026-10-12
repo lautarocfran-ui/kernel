@@ -30,9 +30,7 @@ DATA_DIR.mkdir(exist_ok=True)
 AVAILABLE_FILE = DATA_DIR / "available_4c.txt"
 SEEN_FILE = DATA_DIR / "seen_4c.txt"
 
-# Creamos las carpetas por si no existen
 Path("templates").mkdir(exist_ok=True)
-Path("static").mkdir(exist_ok=True)
 
 LETTERS = string.ascii_lowercase
 DIGITS = string.digits
@@ -271,163 +269,517 @@ async def hunter_loop():
     await broadcast({"type": "status", "status": state.last_status})
 
 
-@app.on_event("startup")
-async def startup():
-    load_persistence()
-    # Creamos el HTML si no existe
-    html_path = Path("templates/index.html")
-    if not html_path.exists():
-        html_path.write_text(INDEX_HTML, encoding="utf-8")
-
-
-INDEX_HTML = """<!DOCTYPE html>
+INDEX_HTML = r"""<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KERNEL // 4C LEET</title>
 <style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body {
-  background: #000; color: #F4F4F7;
-  font-family: 'Segoe UI', system-ui, sans-serif;
-  min-height: 100vh; padding: 18px;
-}
-.rail {
-  height: 2px; margin-bottom: 14px;
-  background: linear-gradient(90deg, #FF0033, #8A001C, #000);
-}
-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-.brand { font-weight: 900; letter-spacing: 1.5px; font-size: 15px; }
-.k {
-  display: inline-flex; width: 26px; height: 26px; background: #FF0033;
-  color: #fff; border-radius: 7px; align-items: center; justify-content: center;
-  font-size: 16px; margin-right: 6px;
-}
-.dim { color: #777985; font-weight: 500; }
-.state { font-size: 11px; font-weight: 900; letter-spacing: 1px; color: #FF0033; }
-.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 18px; }
-.card {
-  background: #08080B; border: 1px solid #25252D; border-radius: 10px;
-  padding: 14px; text-align: center;
-}
-.card.green .num { color: #4CE0A0; }
-.num { font-size: 22px; font-weight: 800; }
-.lab { font-size: 9px; color: #777985; letter-spacing: 1px; margin-top: 4px; }
-.controls { display: flex; gap: 10px; align-items: center; margin-bottom: 22px; }
-button {
-  border: 1px solid #2A2A34; background: #0A0A0D; color: #E0E0E8;
-  border-radius: 7px; padding: 9px 18px; font-weight: 800; font-size: 11px;
-  cursor: pointer; letter-spacing: .4px;
-}
-button:hover { border-color: #B5002B; }
-button.primary {
-  background: linear-gradient(135deg, #FF1748, #FF0033); border-color: #FF3158; color: #fff;
-}
-button.stop { color: #FF7086; border-color: #601225; background: #150308; }
-button:disabled { opacity: .35; cursor: default; }
-.webhook { margin-left: auto; font-size: 10px; color: #68E5AD; font-weight: 700; }
-.hits h2 { font-size: 10px; letter-spacing: 1.2px; color: #858692; margin-bottom: 10px; }
-#hitlist { list-style: none; max-height: 420px; overflow-y: auto; }
-#hitlist li {
-  display: flex; justify-content: space-between; padding: 9px 12px;
-  background: #060608; border: 1px solid #1B1B22; border-radius: 7px;
-  margin-bottom: 5px; font-family: 'Cascadia Mono', Consolas, monospace;
-}
-.name { color: #4CE0A0; font-weight: 700; }
-.ms { color: #777985; font-size: 11px; }
-@media (max-width: 640px) {
-  .stats { grid-template-columns: 1fr 1fr; }
-}
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&family=JetBrains+Mono:wght@500;700&display=swap');
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #000;
+    color: #F4F4F7;
+    font-family: 'Inter', system-ui, sans-serif;
+    min-height: 100vh;
+    padding: 20px;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(ellipse at 15% 15%, rgba(255,0,51,0.09) 0%, transparent 50%),
+      radial-gradient(ellipse at 85% 85%, rgba(255,0,51,0.05) 0%, transparent 50%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .wrap {
+    position: relative;
+    z-index: 1;
+    max-width: 920px;
+    margin: 0 auto;
+  }
+
+  .rail {
+    height: 3px;
+    background: linear-gradient(90deg, #FF0033, #FF3355, #8A001C, transparent);
+    border-radius: 2px;
+    margin-bottom: 22px;
+    animation: railPulse 3.2s ease-in-out infinite;
+  }
+
+  @keyframes railPulse {
+    0%, 100% { opacity: 1; filter: brightness(1); }
+    50% { opacity: 0.55; filter: brightness(1.3); }
+  }
+
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 28px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 900;
+    letter-spacing: 1.8px;
+    font-size: 16px;
+  }
+
+  .k {
+    width: 34px;
+    height: 34px;
+    background: linear-gradient(135deg, #FF0033, #CC0029);
+    color: #fff;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: 900;
+    box-shadow: 0 0 24px rgba(255,0,51,0.5);
+    animation: kGlow 2.8s ease-in-out infinite;
+  }
+
+  @keyframes kGlow {
+    0%, 100% { box-shadow: 0 0 18px rgba(255,0,51,0.4); }
+    50% { box-shadow: 0 0 32px rgba(255,0,51,0.7); }
+  }
+
+  .dim { color: #777985; font-weight: 500; letter-spacing: 1px; }
+
+  .state-box {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    background: #0A0A0D;
+    border: 1px solid #2A2A34;
+    border-radius: 22px;
+    padding: 7px 16px;
+  }
+
+  .pulse {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #FF0033;
+    transition: background 0.3s;
+  }
+
+  .pulse.on {
+    background: #4CE0A0;
+    animation: pulseAnim 1.35s infinite;
+  }
+
+  @keyframes pulseAnim {
+    0% { box-shadow: 0 0 0 0 rgba(76,224,160,0.75); }
+    70% { box-shadow: 0 0 0 11px rgba(76,224,160,0); }
+    100% { box-shadow: 0 0 0 0 rgba(76,224,160,0); }
+  }
+
+  .state {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 1.3px;
+    color: #FF0033;
+    transition: color 0.3s;
+  }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+
+  .card {
+    background: #08080B;
+    border: 1px solid #25252D;
+    border-radius: 14px;
+    padding: 18px 12px;
+    text-align: center;
+    transition: border-color 0.25s, transform 0.25s, box-shadow 0.25s;
+  }
+
+  .card:hover {
+    border-color: #FF0033;
+    transform: translateY(-3px);
+    box-shadow: 0 8px 24px rgba(255,0,51,0.12);
+  }
+
+  .card.green { border-color: #1A3A2A; }
+  .card.green:hover {
+    border-color: #4CE0A0;
+    box-shadow: 0 8px 24px rgba(76,224,160,0.12);
+  }
+
+  .num {
+    font-size: 26px;
+    font-weight: 900;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: -0.5px;
+  }
+
+  .card.green .num { color: #4CE0A0; }
+
+  .lab {
+    font-size: 10px;
+    color: #777985;
+    letter-spacing: 1.4px;
+    margin-top: 6px;
+    font-weight: 600;
+  }
+
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 28px;
+  }
+
+  button {
+    border: 1px solid #2A2A34;
+    background: #0A0A0D;
+    color: #E0E0E8;
+    border-radius: 10px;
+    padding: 12px 22px;
+    font-weight: 800;
+    font-size: 12px;
+    cursor: pointer;
+    letter-spacing: 0.6px;
+    transition: all 0.2s;
+    font-family: 'Inter', sans-serif;
+  }
+
+  button:hover:not(:disabled) {
+    border-color: #FF0033;
+    background: #12050A;
+  }
+
+  button:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  button.primary {
+    background: linear-gradient(135deg, #FF1748, #FF0033);
+    border-color: #FF3158;
+    color: #fff;
+    box-shadow: 0 4px 22px rgba(255,0,51,0.4);
+  }
+
+  button.primary:hover:not(:disabled) {
+    background: linear-gradient(135deg, #FF3355, #FF1A40);
+    box-shadow: 0 6px 30px rgba(255,0,51,0.55);
+    transform: translateY(-1px);
+  }
+
+  button.stop {
+    color: #FF7086;
+    border-color: #601225;
+    background: #150308;
+  }
+
+  button.stop:hover:not(:disabled) {
+    border-color: #FF0033;
+    background: #22040C;
+  }
+
+  button.test {
+    color: #8AB9FF;
+    border-color: #2A3A55;
+    background: #080C14;
+  }
+
+  button.test:hover:not(:disabled) {
+    border-color: #4A7AFF;
+    background: #0C1220;
+  }
+
+  .webhook {
+    margin-left: auto;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    padding: 7px 14px;
+    border-radius: 20px;
+    background: #06110C;
+    border: 1px solid #2A5141;
+    color: #68E5AD;
+  }
+
+  .webhook.off {
+    background: #110608;
+    border-color: #4A2020;
+    color: #FF7086;
+  }
+
+  .hits-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+
+  .hits h2 {
+    font-size: 11px;
+    letter-spacing: 1.6px;
+    color: #858692;
+    font-weight: 700;
+  }
+
+  .hits-count {
+    font-size: 11px;
+    color: #4CE0A0;
+    font-weight: 700;
+  }
+
+  #hitlist {
+    list-style: none;
+    max-height: 380px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  #hitlist li {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 13px 16px;
+    background: #060608;
+    border: 1px solid #1B1B22;
+    border-radius: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    animation: slideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(-12px) scale(0.97); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  .name {
+    color: #4CE0A0;
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: 1.2px;
+  }
+
+  .ms {
+    color: #777985;
+    font-size: 12px;
+  }
+
+  .empty {
+    text-align: center;
+    padding: 48px 20px;
+    color: #555;
+    font-size: 13px;
+    letter-spacing: 0.4px;
+  }
+
+  .toast {
+    position: fixed;
+    bottom: 28px;
+    left: 50%;
+    transform: translateX(-50%) translateY(90px);
+    background: #0A0A0D;
+    border: 1px solid #FF0033;
+    color: #F4F4F7;
+    padding: 13px 24px;
+    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 600;
+    opacity: 0;
+    transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    z-index: 100;
+    pointer-events: none;
+    box-shadow: 0 10px 40px rgba(255,0,51,0.25);
+  }
+
+  .toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  @media (max-width: 640px) {
+    .stats { grid-template-columns: 1fr 1fr; }
+    .controls { flex-direction: column; align-items: stretch; }
+    .webhook { margin-left: 0; text-align: center; }
+  }
 </style>
 </head>
 <body>
-<div class="rail"></div>
-<header>
-  <div class="brand"><span class="k">K</span> KERNEL <span class="dim">/ 4C LEET</span></div>
-  <div class="state" id="state">IDLE</div>
-</header>
+<div class="wrap">
+  <div class="rail"></div>
 
-<section class="stats">
-  <div class="card"><div class="num" id="checked">0</div><div class="lab">CHECKED</div></div>
-  <div class="card green"><div class="num" id="available">0</div><div class="lab">AVAILABLE</div></div>
-  <div class="card"><div class="num" id="interval">—</div><div class="lab">INTERVAL</div></div>
-  <div class="card"><div class="num" id="uptime">00:00</div><div class="lab">UPTIME</div></div>
-</section>
+  <header>
+    <div class="brand">
+      <span class="k">K</span>
+      KERNEL <span class="dim">/ 4C LEET</span>
+    </div>
+    <div class="state-box">
+      <div class="pulse" id="pulse"></div>
+      <div class="state" id="state">IDLE</div>
+    </div>
+  </header>
 
-<section class="controls">
-  <button id="start" class="primary">START HUNT ›</button>
-  <button id="stop" class="stop" disabled>STOP</button>
-  <span class="webhook" id="webhook">{{ "WEBHOOK ON" if webhook else "WEBHOOK OFF" }}</span>
-</section>
+  <section class="stats">
+    <div class="card">
+      <div class="num" id="checked">0</div>
+      <div class="lab">COMPROBADOS</div>
+    </div>
+    <div class="card green">
+      <div class="num" id="available">0</div>
+      <div class="lab">DISPONIBLES</div>
+    </div>
+    <div class="card">
+      <div class="num" id="interval">—</div>
+      <div class="lab">INTERVALO</div>
+    </div>
+    <div class="card">
+      <div class="num" id="uptime">00:00</div>
+      <div class="lab">TIEMPO</div>
+    </div>
+  </section>
 
-<section class="hits">
-  <h2>LIVE HITS</h2>
-  <ul id="hitlist"></ul>
-</section>
+  <section class="controls">
+    <button id="start" class="primary">▶  EMPEZAR BÚSQUEDA</button>
+    <button id="stop" class="stop" disabled>■  DETENER</button>
+    <button id="test" class="test">⚡  PROBAR WEBHOOK</button>
+    <span class="webhook" id="webhook">WEBHOOK OFF</span>
+  </section>
+
+  <section class="hits">
+    <div class="hits-header">
+      <h2>NOMBRES ENCONTRADOS</h2>
+      <span class="hits-count" id="hitsCount">0 hits</span>
+    </div>
+    <ul id="hitlist">
+      <li class="empty" id="emptyMsg">Todavía no se encontró ningún nombre disponible…</li>
+    </ul>
+  </section>
+</div>
+
+<div class="toast" id="toast"></div>
 
 <script>
 const stateEl = document.getElementById('state');
+const pulseEl = document.getElementById('pulse');
 const checkedEl = document.getElementById('checked');
 const availableEl = document.getElementById('available');
 const intervalEl = document.getElementById('interval');
 const uptimeEl = document.getElementById('uptime');
 const startBtn = document.getElementById('start');
 const stopBtn = document.getElementById('stop');
+const testBtn = document.getElementById('test');
 const hitlist = document.getElementById('hitlist');
+const emptyMsg = document.getElementById('emptyMsg');
+const hitsCount = document.getElementById('hitsCount');
+const webhookEl = document.getElementById('webhook');
+const toast = document.getElementById('toast');
 
 let startTs = 0;
+let hitTotal = 0;
+
+function showToast(msg) {
+  toast.textContent = msg;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 3000);
+}
 
 function fmt(s) {
   const m = Math.floor(s/60), sec = s%60;
   return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
 }
 
+function setRunning(on) {
+  startBtn.disabled = on;
+  stopBtn.disabled = !on;
+  pulseEl.classList.toggle('on', on);
+  stateEl.style.color = on ? '#4CE0A0' : '#FF0033';
+}
+
 startBtn.onclick = async () => {
-  await fetch('/api/start', {method:'POST'});
-  startBtn.disabled = true;
-  stopBtn.disabled = false;
-  stateEl.textContent = 'HUNTING';
-  stateEl.style.color = '#4CE0A0';
-  startTs = Date.now();
+  const r = await fetch('/api/start', {method:'POST'});
+  if (r.ok) {
+    setRunning(true);
+    stateEl.textContent = 'HUNTING';
+    startTs = Date.now();
+    showToast('Búsqueda iniciada');
+  }
 };
 
 stopBtn.onclick = async () => {
   await fetch('/api/stop', {method:'POST'});
-  startBtn.disabled = false;
-  stopBtn.disabled = true;
+  setRunning(false);
+  stateEl.textContent = 'STOPPED';
+  showToast('Búsqueda detenida');
+};
+
+testBtn.onclick = async () => {
+  testBtn.disabled = true;
+  testBtn.textContent = 'PROBANDO…';
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    if (d.webhook_configured) {
+      showToast('✓ Webhook configurado correctamente');
+    } else {
+      showToast('✗ No hay webhook configurado');
+    }
+  } catch {
+    showToast('✗ Error de conexión');
+  }
+  testBtn.disabled = false;
+  testBtn.textContent = '⚡  PROBAR WEBHOOK';
 };
 
 const ws = new WebSocket((location.protocol==='https:'?'wss:':'ws:') + '//' + location.host + '/ws');
+
 ws.onmessage = (e) => {
   const d = JSON.parse(e.data);
+
   if (d.type === 'hit') {
+    if (emptyMsg) emptyMsg.remove();
     const li = document.createElement('li');
     li.innerHTML = `<span class="name">${d.username}</span><span class="ms">${d.elapsed_ms} ms</span>`;
     hitlist.prepend(li);
     availableEl.textContent = d.available.toLocaleString();
     checkedEl.textContent = d.checked.toLocaleString();
+    hitTotal++;
+    hitsCount.textContent = hitTotal + ' hits';
+    showToast('¡Nombre disponible: ' + d.username + '!');
   }
+
   if (d.type === 'progress' || d.type === 'hello') {
     checkedEl.textContent = (d.checked||0).toLocaleString();
     availableEl.textContent = (d.available||0).toLocaleString();
     if (d.interval) intervalEl.textContent = d.interval + 's';
     if (d.status) {
       stateEl.textContent = d.status;
-      stateEl.style.color = d.status==='HUNTING' ? '#4CE0A0' : '#FF0033';
+      stateEl.style.color = d.status === 'HUNTING' ? '#4CE0A0' : '#FF0033';
     }
-    if (d.running !== undefined) {
-      startBtn.disabled = d.running;
-      stopBtn.disabled = !d.running;
-    }
+    if (d.running !== undefined) setRunning(d.running);
   }
+
   if (d.type === 'status') {
     stateEl.textContent = d.status;
-    stateEl.style.color = d.status==='HUNTING' ? '#4CE0A0' : '#F5BB58';
-    if (d.status !== 'HUNTING') {
-      startBtn.disabled = false;
-      stopBtn.disabled = true;
-    }
+    stateEl.style.color = d.status === 'HUNTING' ? '#4CE0A0' : '#F5BB58';
+    if (d.status !== 'HUNTING') setRunning(false);
   }
 };
 
@@ -439,9 +791,15 @@ fetch('/api/status').then(r=>r.json()).then(d=>{
   checkedEl.textContent = d.checked.toLocaleString();
   availableEl.textContent = d.available.toLocaleString();
   stateEl.textContent = d.status;
+  if (d.webhook_configured) {
+    webhookEl.textContent = 'WEBHOOK ON';
+    webhookEl.classList.remove('off');
+  } else {
+    webhookEl.textContent = 'WEBHOOK OFF';
+    webhookEl.classList.add('off');
+  }
   if (d.running) {
-    startBtn.disabled = true;
-    stopBtn.disabled = false;
+    setRunning(true);
     startTs = Date.now() - (d.uptime*1000);
   }
 });
@@ -449,6 +807,13 @@ fetch('/api/status').then(r=>r.json()).then(d=>{
 </body>
 </html>
 """
+
+
+@app.on_event("startup")
+async def startup():
+    load_persistence()
+    html_path = Path("templates/index.html")
+    html_path.write_text(INDEX_HTML, encoding="utf-8")
 
 
 @app.get("/", response_class=HTMLResponse)
