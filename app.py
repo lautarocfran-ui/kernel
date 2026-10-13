@@ -92,22 +92,40 @@ async def flush_seen():
 
 
 def generate_name() -> str:
-    """Prioriza patrones que suelen quedar libres en Roblox."""
+    """Prioriza patrones que suelen quedar libres en Roblox.
+    Pure alnum (pesos originales) + single-underscore (X_YZ / XY_Z).
+    """
     roll = random.random()
-    if roll < 0.58:  # 2 letters + 2 digits
-        chars = [random.choice(LETTERS) for _ in range(2)] + [random.choice(DIGITS) for _ in range(2)]
-    elif roll < 0.85:  # 3 letters + 1 digit
-        chars = [random.choice(LETTERS) for _ in range(3)] + [random.choice(DIGITS)]
-    elif roll < 0.96:  # 1 letter + 3 digits
-        chars = [random.choice(LETTERS)] + [random.choice(DIGITS) for _ in range(3)]
-    else:  # 4 digits
-        chars = [random.choice(DIGITS) for _ in range(4)]
-    random.shuffle(chars)
-    return "".join(chars)
+
+    # 50% pure alphanumeric — mismos pesos que el original, sin romper nada
+    if roll < 0.50:
+        r = random.random()
+        if r < 0.58:  # 2 letters + 2 digits
+            chars = [random.choice(LETTERS) for _ in range(2)] + [random.choice(DIGITS) for _ in range(2)]
+        elif r < 0.85:  # 3 letters + 1 digit
+            chars = [random.choice(LETTERS) for _ in range(3)] + [random.choice(DIGITS)]
+        elif r < 0.96:  # 1 letter + 3 digits
+            chars = [random.choice(LETTERS)] + [random.choice(DIGITS) for _ in range(3)]
+        else:  # 4 digits
+            chars = [random.choice(DIGITS) for _ in range(4)]
+        random.shuffle(chars)
+        return "".join(chars)
+
+    # 50% single-underscore (exactamente uno, nunca al inicio ni al final)
+    alnum = LETTERS + DIGITS
+    # bias a empezar con dígito (estilo 0_2x / 0x_p) → suelen liberarse más rápido
+    a = random.choice(DIGITS) if random.random() < 0.62 else random.choice(LETTERS)
+    b = random.choice(alnum)
+    c = random.choice(alnum)
+
+    if random.random() < 0.52:
+        return f"{a}_{b}{c}"   # X_YZ  e.g. 0_2x
+    return f"{a}{b}_{c}"       # XY_Z  e.g. 0x_p
 
 
 def next_name() -> Optional[str]:
-    for _ in range(1000):
+    # más intentos antes de abandonar → menos idle cuando seen crece
+    for _ in range(4000):
         name = generate_name()
         if name not in state.seen:
             return name
