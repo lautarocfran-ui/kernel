@@ -17,23 +17,27 @@ from fastapi.templating import Jinja2Templates
 
 load_dotenv()
 
-APP_NAME = "4L Hunter"
+APP_NAME = "Kernel"
 API_URL = "https://auth.roblox.com/v1/usernames/validate"
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
 
 WORKERS = 5
-MIN_INTERVAL = 0.22
-MAX_INTERVAL = 2.1
+MIN_INTERVAL = 0.28
+MAX_INTERVAL = 2.0
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
-AVAILABLE_FILE = DATA_DIR / "available_4c.txt"
-SEEN_FILE = DATA_DIR / "seen_4c.txt"
+AVAILABLE_FILE = DATA_DIR / "available_5c.txt"
+SEEN_FILE = DATA_DIR / "seen_5c.txt"
 Path("templates").mkdir(exist_ok=True)
 
+# Letras suaves para nombres más estéticos
+SOFT = "aeioulnrsvy"
+HARD = "bcdfghjkmnpqtwxz"
 LETTERS = string.ascii_lowercase
 DIGITS = string.digits
-ALNUM = LETTERS + DIGITS
+VOWELS = "aeiou"
+CONSONANTS = "bcdfghjklmnpqrstvwxyz"
 
 app = FastAPI(title=APP_NAME)
 templates = Jinja2Templates(directory="templates")
@@ -51,15 +55,13 @@ class State:
         self.seen: set[str] = set()
         self.saved: set[str] = set()
         self._lock = asyncio.Lock()
-        self._interval = 0.28
+        self._interval = 0.36
         self._next_start = 0.0
         self._cooldown_until = 0.0
         self._success_streak = 0
         self._recent_429 = 0
         self._last_429 = 0.0
         self._seen_buffer: list[str] = []
-        self.pool: list[str] = []
-        self.pool_idx: int = 0
 
 
 state = State()
@@ -69,13 +71,13 @@ def load_persistence():
     if AVAILABLE_FILE.exists():
         for line in AVAILABLE_FILE.read_text(encoding="utf-8").splitlines():
             n = line.strip().lower()
-            if len(n) == 4:
+            if len(n) == 5:
                 state.saved.add(n)
                 state.seen.add(n)
     if SEEN_FILE.exists():
         for line in SEEN_FILE.read_text(encoding="utf-8").splitlines():
             n = line.strip().lower()
-            if len(n) == 4:
+            if len(n) == 5:
                 state.seen.add(n)
     state.available = len(state.saved)
 
@@ -94,101 +96,65 @@ async def flush_seen():
             state._seen_buffer.extend(batch)
 
 
-def build_high_value_pool() -> list[str]:
-    """Espacio exhaustivo de TODOS los 4-char válidos que aún tienen chance.
-    Tiers ordenados de mayor a menor probabilidad de estar libres.
-    Cubre: 32_x, 0_2x, 0x_p, a3_b, 7k2m, 0042, etc.
-    Excluye solo-letras (100 % tomados en 2026).
+def aesthetic_5() -> str:
     """
-    tiers: list[list[str]] = [[] for _ in range(6)]
-    seen_local: set[str] = set()
+    Genera nombres de 5 caracteres con mejor estética y menos saturados.
+    Patrones prioritarios:
+      - CVCVC / CVCCV  (suenan bien, no son palabras comunes)
+      - 4 letras + 1 número al final
+      - 3 letras + 2 números
+    Evita 5 letras puras de diccionario y combinaciones feas.
+    """
+    roll = random.random()
 
-    def add(tier: int, name: str):
-        if name not in seen_local and len(name) == 4:
-            # valid Roblox: at most one _, never first/last
-            if name.count("_") > 1:
-                return
-            if name[0] == "_" or name[-1] == "_":
-                return
-            seen_local.add(name)
-            tiers[tier].append(name)
+    if roll < 0.42:
+        # CVCVC  (ej: kalen, sorin, vyrel)
+        c1 = random.choice(CONSONANTS)
+        v1 = random.choice(VOWELS)
+        c2 = random.choice(CONSONANTS)
+        v2 = random.choice(VOWELS)
+        c3 = random.choice(CONSONANTS)
+        return c1 + v1 + c2 + v2 + c3
 
-    # ── Tier 0 (máxima chance): 2 dígitos + _ + alnum  ──  32_x, 7_0a, x_32
-    for d1 in DIGITS:
-        for d2 in DIGITS:
-            for x in ALNUM:
-                add(0, f"{d1}{d2}_{x}")   # DD_X   32_x
-                add(0, f"{d1}_{d2}{x}")   # D_DX   3_2x
-                add(0, f"{x}_{d1}{d2}")   # X_DD   x_32
+    if roll < 0.68:
+        # CVCCV  (ej: drako, velsi)
+        c1 = random.choice(CONSONANTS)
+        v1 = random.choice(VOWELS)
+        c2 = random.choice(CONSONANTS)
+        c3 = random.choice(CONSONANTS)
+        v2 = random.choice(VOWELS)
+        return c1 + v1 + c2 + c3 + v2
 
-    # ── Tier 1: 1 dígito al frente + _  ──  0_2x, 0x_p, 0_x2
-    for d in DIGITS:
-        for x in ALNUM:
-            for y in ALNUM:
-                add(1, f"{d}_{x}{y}")     # D_XX
-                add(1, f"{d}{x}_{y}")     # DX_X
+    if roll < 0.86:
+        # 4 letras suaves + 1 dígito al final  (ej: lune9, sora7)
+        chars = []
+        chars.append(random.choice(SOFT if random.random() < 0.7 else LETTERS))
+        chars.append(random.choice(VOWELS))
+        chars.append(random.choice(CONSONANTS))
+        chars.append(random.choice(VOWELS + "lnrs"))
+        chars.append(random.choice(DIGITS))
+        return "".join(chars)
 
-    # ── Tier 2: letra + dígito + _ + alnum  ──  a3_b, k0_x
-    for x in LETTERS:
-        for d in DIGITS:
-            for y in ALNUM:
-                add(2, f"{x}{d}_{y}")     # XD_X
-                add(2, f"{x}_{d}{y}")     # X_DX
-
-    # ── Tier 3: pure 4-digit  ──  0042, 1337, 9999
-    for n in range(10000):
-        add(3, f"{n:04d}")
-
-    # ── Tier 4: 3 dígitos + 1 letra (cualquier orden) ──
-    for d1 in DIGITS:
-        for d2 in DIGITS:
-            for d3 in DIGITS:
-                for L in LETTERS:
-                    chars = [d1, d2, d3, L]
-                    # todas las posiciones de la letra
-                    for i in range(4):
-                        c = chars[:]
-                        c[i], c[3] = c[3], c[i]  # swap letter into position i
-                        add(4, "".join(c))
-
-    # ── Tier 5: 2 dígitos + 2 letras (cualquier orden) ──
-    for d1 in DIGITS:
-        for d2 in DIGITS:
-            for L1 in LETTERS:
-                for L2 in LETTERS:
-                    base = [d1, d2, L1, L2]
-                    # un sample representativo de permutaciones (no las 24)
-                    for _ in range(6):
-                        random.shuffle(base)
-                        add(5, "".join(base))
-
-    # concatenar tiers en orden de prioridad y barajar solo dentro de cada tier
-    pool: list[str] = []
-    for t in tiers:
-        random.shuffle(t)
-        pool.extend(t)
-    return pool
+    # 3 letras + 2 dígitos (más chance de estar libre)
+    letters = [random.choice(LETTERS) for _ in range(3)]
+    digits = [random.choice(DIGITS) for _ in range(2)]
+    chars = letters + digits
+    random.shuffle(chars)
+    # mantener al menos una letra al inicio para que no sea solo números
+    if chars[0] in DIGITS:
+        for i, c in enumerate(chars):
+            if c in LETTERS:
+                chars[0], chars[i] = chars[i], chars[0]
+                break
+    return "".join(chars)
 
 
 def next_name() -> Optional[str]:
-    """Saca el siguiente candidato del pool exhaustivo (sin repetición).
-    Cuando el pool se agota, regenera uno nuevo filtrando lo ya visto.
-    """
-    # avanzar por el pool pre-construido
-    while state.pool_idx < len(state.pool):
-        name = state.pool[state.pool_idx]
-        state.pool_idx += 1
-        if name not in state.seen:
+    for _ in range(1200):
+        name = aesthetic_5()
+        if name not in state.seen and len(name) == 5:
             return name
-
-    # pool agotado → reconstruir filtrando seen
-    state.pool = [n for n in build_high_value_pool() if n not in state.seen]
-    state.pool_idx = 0
-    if not state.pool:
-        return None
-    name = state.pool[0]
-    state.pool_idx = 1
-    return name
+    return None
 
 
 async def wait_turn() -> bool:
@@ -198,14 +164,14 @@ async def wait_turn() -> bool:
         if wait <= 0:
             state._next_start = now + state._interval
             return True
-        await asyncio.sleep(min(max(wait, 0.01), 0.16))
+        await asyncio.sleep(min(max(wait, 0.01), 0.15))
     return False
 
 
 def record_success():
     state._success_streak += 1
-    if state._success_streak >= 16:
-        state._interval = max(MIN_INTERVAL, state._interval - 0.028)
+    if state._success_streak >= 18:
+        state._interval = max(MIN_INTERVAL, state._interval - 0.025)
         state._success_streak = 0
         state._recent_429 = 0
 
@@ -213,12 +179,12 @@ def record_success():
 def record_429(retry_after: float) -> bool:
     now = time.monotonic()
     state._success_streak = 0
-    if now - state._last_429 > 65:
+    if now - state._last_429 > 70:
         state._recent_429 = 0
     state._recent_429 += 1
     state._last_429 = now
     if now >= state._cooldown_until:
-        state._interval = min(MAX_INTERVAL, max(0.75, state._interval * 1.8))
+        state._interval = min(MAX_INTERVAL, max(0.72, state._interval * 1.75))
     state._cooldown_until = max(state._cooldown_until, now + max(3.0, retry_after, state._interval * 2.8))
     return state._recent_429 >= 3
 
@@ -261,7 +227,7 @@ async def validate(username: str, client: httpx.AsyncClient) -> tuple[str, float
 
         except Exception:
             if attempt == 0:
-                await asyncio.sleep(0.22)
+                await asyncio.sleep(0.2)
                 continue
             return "ERROR", time.perf_counter() - t0
     return "ERROR", 0.0
@@ -271,14 +237,14 @@ async def send_webhook(username: str, elapsed: float) -> None:
     if not WEBHOOK_URL:
         return
     payload = {
-        "username": "4L Hunter",
+        "username": "Kernel",
         "allowed_mentions": {"parse": []},
         "embeds": [{
-            "author": {"name": "4L HUNTER  •  LIVE HIT"},
+            "author": {"name": "KERNEL  •  LIVE HIT"},
             "title": "✓  USERNAME AVAILABLE",
             "description": f"**`{username}`**\n\n`{elapsed*1000:.0f} ms`",
             "color": 0xFF0033,
-            "footer": {"text": "4L Hunter"},
+            "footer": {"text": "Kernel"},
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }],
     }
@@ -356,7 +322,7 @@ async def hunter_loop():
     state.last_status = "HUNTING"
     state.running = True
     async with httpx.AsyncClient(
-        headers={"User-Agent": "4LHunter/4.0", "Accept": "application/json"},
+        headers={"User-Agent": "Kernel/1.0", "Accept": "application/json"},
         limits=httpx.Limits(max_connections=WORKERS + 2),
     ) as client:
         await asyncio.gather(*[asyncio.create_task(worker(client)) for _ in range(WORKERS)])
@@ -372,7 +338,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>4L Hunter</title>
+<title>Kernel</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%23FF0033'/><text x='50' y='68' font-size='52' font-weight='700' fill='white' text-anchor='middle' font-family='system-ui'>K</text></svg>">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap');
 
@@ -384,8 +351,10 @@ body{background:#000;color:#F2F2F7;font-family:'Outfit',system-ui,sans-serif;min
 .rail{height:2px;background:linear-gradient(90deg,#FF0033,#FF2A4F 40%,transparent);margin-bottom:28px;border-radius:2px;opacity:.9}
 
 header{display:flex;justify-content:space-between;align-items:center;margin-bottom:32px}
-.brand{display:flex;align-items:center;gap:14px;font-weight:700;letter-spacing:1.6px;font-size:20px}
-.logo{width:40px;height:40px;background:linear-gradient(145deg,#FF0033,#B00024);border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;box-shadow:0 0 28px rgba(255,0,51,.5)}
+.brand{display:flex;align-items:center;gap:14px;font-weight:700;letter-spacing:2px;font-size:20px}
+.logo{width:42px;height:42px;border-radius:12px;overflow:hidden;box-shadow:0 0 28px rgba(255,0,51,.5);background:#FF0033;display:flex;align-items:center;justify-content:center}
+.logo img{width:100%;height:100%;object-fit:cover}
+.logo-fallback{font-size:18px;font-weight:700;color:#fff}
 .state-box{display:flex;align-items:center;gap:10px;background:rgba(12,12,16,.8);border:1px solid #2A2A34;border-radius:24px;padding:8px 16px;backdrop-filter:blur(12px)}
 .dot{width:8px;height:8px;border-radius:50%;background:#FF0033;transition:background .3s}
 .dot.on{background:#4CE0A0;animation:pulse 1.4s infinite}
@@ -431,7 +400,14 @@ button.stop{color:#FF7086;border-color:#5A1528;background:#140308}
 <div class="wrap">
   <div class="rail"></div>
   <header>
-    <div class="brand"><div class="logo">4L</div>HUNTER</div>
+    <div class="brand">
+      <div class="logo" id="logo">
+        <!-- Si subes el gatito como static/icon.png se usa automáticamente -->
+        <img src="/static/icon.png" alt="Kernel" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+        <span class="logo-fallback" style="display:none">K</span>
+      </div>
+      KERNEL
+    </div>
     <div class="state-box"><div class="dot" id="dot"></div><div class="state" id="state">STARTING</div></div>
   </header>
 
@@ -458,7 +434,6 @@ button.stop{color:#FF7086;border-color:#5A1528;background:#140308}
 <div class="toast" id="toast"></div>
 
 <script>
-/* Interactive grid background */
 const canvas = document.getElementById('bg');
 const ctx = canvas.getContext('2d');
 let w, h, nodes = [], mouse = {x: -9999, y: -9999};
@@ -517,7 +492,6 @@ function draw(t) {
 resize();
 requestAnimationFrame(draw);
 
-/* App */
 const $ = id => document.getElementById(id);
 const stateEl = $('state'), dot = $('dot'), checkedEl = $('checked'), availableEl = $('available');
 const intervalEl = $('interval'), uptimeEl = $('uptime'), stopBtn = $('stop');
@@ -606,11 +580,8 @@ fetch('/api/status').then(r => r.json()).then(d => {
 @app.on_event("startup")
 async def startup():
     load_persistence()
-    # pool exhaustivo de los 4-char con más chance de estar libres
-    state.pool = [n for n in build_high_value_pool() if n not in state.seen]
-    state.pool_idx = 0
     Path("templates/index.html").write_text(INDEX_HTML, encoding="utf-8")
-    # Auto-start on deploy
+    Path("static").mkdir(exist_ok=True)
     if not state.running:
         state.running = True
         state.last_status = "HUNTING"
