@@ -22,7 +22,7 @@ API_URL = "https://auth.roblox.com/v1/usernames/validate"
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
 
 WORKERS = 5
-MIN_INTERVAL = 0.32
+MIN_INTERVAL = 0.22
 MAX_INTERVAL = 2.1
 
 DATA_DIR = Path("data")
@@ -33,6 +33,7 @@ Path("templates").mkdir(exist_ok=True)
 
 LETTERS = string.ascii_lowercase
 DIGITS = string.digits
+ALNUM = LETTERS + DIGITS
 
 app = FastAPI(title=APP_NAME)
 templates = Jinja2Templates(directory="templates")
@@ -50,13 +51,15 @@ class State:
         self.seen: set[str] = set()
         self.saved: set[str] = set()
         self._lock = asyncio.Lock()
-        self._interval = 0.40
+        self._interval = 0.28
         self._next_start = 0.0
         self._cooldown_until = 0.0
         self._success_streak = 0
         self._recent_429 = 0
         self._last_429 = 0.0
         self._seen_buffer: list[str] = []
+        self.pool: list[str] = []
+        self.pool_idx: int = 0
 
 
 state = State()
@@ -91,45 +94,101 @@ async def flush_seen():
             state._seen_buffer.extend(batch)
 
 
-def generate_name() -> str:
-    """Prioriza patrones que suelen quedar libres en Roblox.
-    Pure alnum (pesos originales) + single-underscore (X_YZ / XY_Z).
+def build_high_value_pool() -> list[str]:
+    """Espacio exhaustivo de TODOS los 4-char válidos que aún tienen chance.
+    Tiers ordenados de mayor a menor probabilidad de estar libres.
+    Cubre: 32_x, 0_2x, 0x_p, a3_b, 7k2m, 0042, etc.
+    Excluye solo-letras (100 % tomados en 2026).
     """
-    roll = random.random()
+    tiers: list[list[str]] = [[] for _ in range(6)]
+    seen_local: set[str] = set()
 
-    # 50% pure alphanumeric — mismos pesos que el original, sin romper nada
-    if roll < 0.50:
-        r = random.random()
-        if r < 0.58:  # 2 letters + 2 digits
-            chars = [random.choice(LETTERS) for _ in range(2)] + [random.choice(DIGITS) for _ in range(2)]
-        elif r < 0.85:  # 3 letters + 1 digit
-            chars = [random.choice(LETTERS) for _ in range(3)] + [random.choice(DIGITS)]
-        elif r < 0.96:  # 1 letter + 3 digits
-            chars = [random.choice(LETTERS)] + [random.choice(DIGITS) for _ in range(3)]
-        else:  # 4 digits
-            chars = [random.choice(DIGITS) for _ in range(4)]
-        random.shuffle(chars)
-        return "".join(chars)
+    def add(tier: int, name: str):
+        if name not in seen_local and len(name) == 4:
+            # valid Roblox: at most one _, never first/last
+            if name.count("_") > 1:
+                return
+            if name[0] == "_" or name[-1] == "_":
+                return
+            seen_local.add(name)
+            tiers[tier].append(name)
 
-    # 50% single-underscore (exactamente uno, nunca al inicio ni al final)
-    alnum = LETTERS + DIGITS
-    # bias a empezar con dígito (estilo 0_2x / 0x_p) → suelen liberarse más rápido
-    a = random.choice(DIGITS) if random.random() < 0.62 else random.choice(LETTERS)
-    b = random.choice(alnum)
-    c = random.choice(alnum)
+    # ── Tier 0 (máxima chance): 2 dígitos + _ + alnum  ──  32_x, 7_0a, x_32
+    for d1 in DIGITS:
+        for d2 in DIGITS:
+            for x in ALNUM:
+                add(0, f"{d1}{d2}_{x}")   # DD_X   32_x
+                add(0, f"{d1}_{d2}{x}")   # D_DX   3_2x
+                add(0, f"{x}_{d1}{d2}")   # X_DD   x_32
 
-    if random.random() < 0.52:
-        return f"{a}_{b}{c}"   # X_YZ  e.g. 0_2x
-    return f"{a}{b}_{c}"       # XY_Z  e.g. 0x_p
+    # ── Tier 1: 1 dígito al frente + _  ──  0_2x, 0x_p, 0_x2
+    for d in DIGITS:
+        for x in ALNUM:
+            for y in ALNUM:
+                add(1, f"{d}_{x}{y}")     # D_XX
+                add(1, f"{d}{x}_{y}")     # DX_X
+
+    # ── Tier 2: letra + dígito + _ + alnum  ──  a3_b, k0_x
+    for x in LETTERS:
+        for d in DIGITS:
+            for y in ALNUM:
+                add(2, f"{x}{d}_{y}")     # XD_X
+                add(2, f"{x}_{d}{y}")     # X_DX
+
+    # ── Tier 3: pure 4-digit  ──  0042, 1337, 9999
+    for n in range(10000):
+        add(3, f"{n:04d}")
+
+    # ── Tier 4: 3 dígitos + 1 letra (cualquier orden) ──
+    for d1 in DIGITS:
+        for d2 in DIGITS:
+            for d3 in DIGITS:
+                for L in LETTERS:
+                    chars = [d1, d2, d3, L]
+                    # todas las posiciones de la letra
+                    for i in range(4):
+                        c = chars[:]
+                        c[i], c[3] = c[3], c[i]  # swap letter into position i
+                        add(4, "".join(c))
+
+    # ── Tier 5: 2 dígitos + 2 letras (cualquier orden) ──
+    for d1 in DIGITS:
+        for d2 in DIGITS:
+            for L1 in LETTERS:
+                for L2 in LETTERS:
+                    base = [d1, d2, L1, L2]
+                    # un sample representativo de permutaciones (no las 24)
+                    for _ in range(6):
+                        random.shuffle(base)
+                        add(5, "".join(base))
+
+    # concatenar tiers en orden de prioridad y barajar solo dentro de cada tier
+    pool: list[str] = []
+    for t in tiers:
+        random.shuffle(t)
+        pool.extend(t)
+    return pool
 
 
 def next_name() -> Optional[str]:
-    # más intentos antes de abandonar → menos idle cuando seen crece
-    for _ in range(4000):
-        name = generate_name()
+    """Saca el siguiente candidato del pool exhaustivo (sin repetición).
+    Cuando el pool se agota, regenera uno nuevo filtrando lo ya visto.
+    """
+    # avanzar por el pool pre-construido
+    while state.pool_idx < len(state.pool):
+        name = state.pool[state.pool_idx]
+        state.pool_idx += 1
         if name not in state.seen:
             return name
-    return None
+
+    # pool agotado → reconstruir filtrando seen
+    state.pool = [n for n in build_high_value_pool() if n not in state.seen]
+    state.pool_idx = 0
+    if not state.pool:
+        return None
+    name = state.pool[0]
+    state.pool_idx = 1
+    return name
 
 
 async def wait_turn() -> bool:
@@ -547,6 +606,9 @@ fetch('/api/status').then(r => r.json()).then(d => {
 @app.on_event("startup")
 async def startup():
     load_persistence()
+    # pool exhaustivo de los 4-char con más chance de estar libres
+    state.pool = [n for n in build_high_value_pool() if n not in state.seen]
+    state.pool_idx = 0
     Path("templates/index.html").write_text(INDEX_HTML, encoding="utf-8")
     # Auto-start on deploy
     if not state.running:
