@@ -13,6 +13,7 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 load_dotenv()
@@ -30,16 +31,16 @@ DATA_DIR.mkdir(exist_ok=True)
 AVAILABLE_FILE = DATA_DIR / "available_5c.txt"
 SEEN_FILE = DATA_DIR / "seen_5c.txt"
 Path("templates").mkdir(exist_ok=True)
+Path("static").mkdir(exist_ok=True)
 
-# Letras suaves para nombres más estéticos
-SOFT = "aeioulnrsvy"
-HARD = "bcdfghjkmnpqtwxz"
 LETTERS = string.ascii_lowercase
 DIGITS = string.digits
-VOWELS = "aeiou"
-CONSONANTS = "bcdfghjklmnpqrstvwxyz"
 
 app = FastAPI(title=APP_NAME)
+try:
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+except Exception:
+    pass
 templates = Jinja2Templates(directory="templates")
 
 
@@ -68,16 +69,13 @@ state = State()
 
 
 def load_persistence():
-    if AVAILABLE_FILE.exists():
-        for line in AVAILABLE_FILE.read_text(encoding="utf-8").splitlines():
+    for path, target in ((AVAILABLE_FILE, state.saved), (SEEN_FILE, state.seen)):
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
             n = line.strip().lower()
             if len(n) == 5:
-                state.saved.add(n)
-                state.seen.add(n)
-    if SEEN_FILE.exists():
-        for line in SEEN_FILE.read_text(encoding="utf-8").splitlines():
-            n = line.strip().lower()
-            if len(n) == 5:
+                target.add(n)
                 state.seen.add(n)
     state.available = len(state.saved)
 
@@ -96,63 +94,24 @@ async def flush_seen():
             state._seen_buffer.extend(batch)
 
 
-def aesthetic_5() -> str:
-    """
-    Genera nombres de 5 caracteres con mejor estética y menos saturados.
-    Patrones prioritarios:
-      - CVCVC / CVCCV  (suenan bien, no son palabras comunes)
-      - 4 letras + 1 número al final
-      - 3 letras + 2 números
-    Evita 5 letras puras de diccionario y combinaciones feas.
-    """
-    roll = random.random()
-
-    if roll < 0.42:
-        # CVCVC  (ej: kalen, sorin, vyrel)
-        c1 = random.choice(CONSONANTS)
-        v1 = random.choice(VOWELS)
-        c2 = random.choice(CONSONANTS)
-        v2 = random.choice(VOWELS)
-        c3 = random.choice(CONSONANTS)
-        return c1 + v1 + c2 + v2 + c3
-
-    if roll < 0.68:
-        # CVCCV  (ej: drako, velsi)
-        c1 = random.choice(CONSONANTS)
-        v1 = random.choice(VOWELS)
-        c2 = random.choice(CONSONANTS)
-        c3 = random.choice(CONSONANTS)
-        v2 = random.choice(VOWELS)
-        return c1 + v1 + c2 + c3 + v2
-
-    if roll < 0.86:
-        # 4 letras suaves + 1 dígito al final  (ej: lune9, sora7)
-        chars = []
-        chars.append(random.choice(SOFT if random.random() < 0.7 else LETTERS))
-        chars.append(random.choice(VOWELS))
-        chars.append(random.choice(CONSONANTS))
-        chars.append(random.choice(VOWELS + "lnrs"))
-        chars.append(random.choice(DIGITS))
-        return "".join(chars)
-
-    # 3 letras + 2 dígitos (más chance de estar libre)
-    letters = [random.choice(LETTERS) for _ in range(3)]
-    digits = [random.choice(DIGITS) for _ in range(2)]
-    chars = letters + digits
-    random.shuffle(chars)
-    # mantener al menos una letra al inicio para que no sea solo números
-    if chars[0] in DIGITS:
-        for i, c in enumerate(chars):
-            if c in LETTERS:
-                chars[0], chars[i] = chars[i], chars[0]
-                break
+def random_5() -> str:
+    """5 chars fully random: mostly letters + 1 number in a random position (a9wen, k3lmp…)."""
+    chars = [random.choice(LETTERS) for _ in range(5)]
+    # put 1 digit in a random slot (not forced pattern)
+    pos = random.randint(0, 4)
+    chars[pos] = random.choice(DIGITS)
+    # ~25% chance of a second digit somewhere else
+    if random.random() < 0.25:
+        pos2 = random.randint(0, 4)
+        if pos2 != pos:
+            chars[pos2] = random.choice(DIGITS)
     return "".join(chars)
 
 
 def next_name() -> Optional[str]:
-    for _ in range(1200):
-        name = aesthetic_5()
-        if name not in state.seen and len(name) == 5:
+    for _ in range(1500):
+        name = random_5()
+        if name not in state.seen:
             return name
     return None
 
@@ -185,7 +144,9 @@ def record_429(retry_after: float) -> bool:
     state._last_429 = now
     if now >= state._cooldown_until:
         state._interval = min(MAX_INTERVAL, max(0.72, state._interval * 1.75))
-    state._cooldown_until = max(state._cooldown_until, now + max(3.0, retry_after, state._interval * 2.8))
+    state._cooldown_until = max(
+        state._cooldown_until, now + max(3.0, retry_after, state._interval * 2.8)
+    )
     return state._recent_429 >= 3
 
 
@@ -205,7 +166,6 @@ async def validate(username: str, client: httpx.AsyncClient) -> tuple[str, float
                 timeout=4.0,
             )
             elapsed = time.perf_counter() - t0
-
             if r.status_code == 429:
                 if record_429(float(r.headers.get("Retry-After", 6) or 6)):
                     state.running = False
@@ -213,18 +173,14 @@ async def validate(username: str, client: httpx.AsyncClient) -> tuple[str, float
                 if attempt == 0:
                     continue
                 return "RATE LIMITED", elapsed
-
             if r.status_code in {500, 502, 503, 504} and attempt == 0:
                 await asyncio.sleep(0.4)
                 continue
-
             if r.status_code != 200:
                 return "ERROR", elapsed
-
             code = r.json().get("code")
             record_success()
             return ("AVAILABLE", elapsed) if code == 0 else ("TAKEN", elapsed)
-
         except Exception:
             if attempt == 0:
                 await asyncio.sleep(0.2)
@@ -272,16 +228,12 @@ async def worker(client: httpx.AsyncClient):
         name = next_name()
         if not name:
             continue
-
         state.seen.add(name)
         state._seen_buffer.append(name)
-
         status, elapsed = await validate(name, client)
         if status == "SKIPPED":
             continue
-
         state.checked += 1
-
         if status == "AVAILABLE":
             state.available += 1
             state.last_hit = name
@@ -301,10 +253,8 @@ async def worker(client: httpx.AsyncClient):
             state.last_status = "RATE LIMITED"
             await broadcast({"type": "status", "status": "RATE LIMITED"})
             break
-
         if len(state._seen_buffer) >= 40:
             await flush_seen()
-
         if state.checked % 10 == 0:
             await broadcast({
                 "type": "progress",
@@ -322,7 +272,7 @@ async def hunter_loop():
     state.last_status = "HUNTING"
     state.running = True
     async with httpx.AsyncClient(
-        headers={"User-Agent": "Kernel/1.0", "Accept": "application/json"},
+        headers={"User-Agent": "Kernel/2.1", "Accept": "application/json"},
         limits=httpx.Limits(max_connections=WORKERS + 2),
     ) as client:
         await asyncio.gather(*[asyncio.create_task(worker(client)) for _ in range(WORKERS)])
@@ -342,57 +292,53 @@ INDEX_HTML = r"""<!DOCTYPE html>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%23FF0033'/><text x='50' y='68' font-size='52' font-weight='700' fill='white' text-anchor='middle' font-family='system-ui'>K</text></svg>">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap');
-
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#000;color:#F2F2F7;font-family:'Outfit',system-ui,sans-serif;min-height:100vh;overflow-x:hidden}
 #bg{position:fixed;inset:0;z-index:0;pointer-events:none}
-.wrap{position:relative;z-index:1;max-width:880px;margin:0 auto;padding:32px 20px}
-
-.rail{height:2px;background:linear-gradient(90deg,#FF0033,#FF2A4F 40%,transparent);margin-bottom:28px;border-radius:2px;opacity:.9}
-
-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:32px}
-.brand{display:flex;align-items:center;gap:14px;font-weight:700;letter-spacing:2px;font-size:20px}
-.logo{width:42px;height:42px;border-radius:12px;overflow:hidden;box-shadow:0 0 28px rgba(255,0,51,.5);background:#FF0033;display:flex;align-items:center;justify-content:center}
+.wrap{position:relative;z-index:1;max-width:920px;margin:0 auto;padding:28px 18px}
+.rail{height:2px;background:linear-gradient(90deg,#FF0033,#FF2A4F 50%,transparent);margin-bottom:24px;border-radius:2px;opacity:.95}
+header{display:flex;justify-content:space-between;align-items:center;margin-bottom:26px;gap:12px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:12px;font-weight:700;letter-spacing:2.2px;font-size:20px}
+.logo{width:42px;height:42px;border-radius:12px;overflow:hidden;box-shadow:0 0 28px rgba(255,0,51,.5);background:linear-gradient(145deg,#FF0033,#B00024);display:flex;align-items:center;justify-content:center;transition:transform .25s,box-shadow .25s}
+.logo:hover{transform:scale(1.06);box-shadow:0 0 36px rgba(255,0,51,.7)}
 .logo img{width:100%;height:100%;object-fit:cover}
-.logo-fallback{font-size:18px;font-weight:700;color:#fff}
-.state-box{display:flex;align-items:center;gap:10px;background:rgba(12,12,16,.8);border:1px solid #2A2A34;border-radius:24px;padding:8px 16px;backdrop-filter:blur(12px)}
-.dot{width:8px;height:8px;border-radius:50%;background:#FF0033;transition:background .3s}
-.dot.on{background:#4CE0A0;animation:pulse 1.4s infinite}
-@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(76,224,160,.65)}70%{box-shadow:0 0 0 11px transparent}100%{box-shadow:0 0 0 0 transparent}}
+.logo-fallback{color:#fff;font-weight:700;font-size:18px}
+.state-box{display:flex;align-items:center;gap:9px;background:rgba(12,12,16,.88);border:1px solid #2A2A34;border-radius:24px;padding:8px 15px;backdrop-filter:blur(12px);transition:border-color .25s}
+.state-box:hover{border-color:#FF0033}
+.dot{width:8px;height:8px;border-radius:50%;background:#FF0033}
+.dot.on{background:#4CE0A0;animation:pulse 1.35s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(76,224,160,.65)}70%{box-shadow:0 0 0 11px transparent}}
 .state{font-size:11px;font-weight:600;letter-spacing:1.5px;color:#FF0033}
-
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:28px}
-.card{background:rgba(10,10,14,.75);border:1px solid #22222C;border-radius:14px;padding:18px 12px;text-align:center;backdrop-filter:blur(8px);transition:border-color .25s,transform .25s}
-.card:hover{border-color:#FF0033;transform:translateY(-2px)}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:22px}
+.card{background:rgba(10,10,14,.8);border:1px solid #22222C;border-radius:14px;padding:18px 10px;text-align:center;backdrop-filter:blur(10px);transition:border-color .25s,transform .25s,box-shadow .25s;cursor:default}
+.card:hover{border-color:#FF0033;transform:translateY(-3px);box-shadow:0 10px 28px rgba(255,0,51,.12)}
 .card.green{border-color:#1A3328}
-.card.green:hover{border-color:#4CE0A0}
-.num{font-size:24px;font-weight:700;font-family:'JetBrains Mono',monospace}
+.card.green:hover{border-color:#4CE0A0;box-shadow:0 10px 28px rgba(76,224,160,.1)}
+.num{font-size:23px;font-weight:700;font-family:'JetBrains Mono',monospace}
 .card.green .num{color:#4CE0A0}
 .lab{font-size:10px;color:#6B6B78;letter-spacing:1.5px;margin-top:5px;font-weight:500}
-
-.controls{display:flex;gap:10px;align-items:center;margin-bottom:28px;flex-wrap:wrap}
-button{border:1px solid #2A2A34;background:rgba(12,12,16,.9);color:#E4E4EC;border-radius:10px;padding:11px 20px;font-weight:600;font-size:12px;cursor:pointer;letter-spacing:.5px;font-family:'Outfit',sans-serif;transition:all .2s}
-button:hover:not(:disabled){border-color:#FF0033;background:#14050A}
+.controls{display:flex;gap:8px;align-items:center;margin-bottom:20px;flex-wrap:wrap}
+button,select{border:1px solid #2A2A34;background:rgba(12,12,16,.92);color:#E4E4EC;border-radius:10px;padding:10px 16px;font-weight:600;font-size:12px;cursor:pointer;font-family:'Outfit',sans-serif;transition:all .2s}
+button:hover:not(:disabled),select:hover{border-color:#FF0033;background:#14050A}
 button:disabled{opacity:.35;cursor:not-allowed}
 button.stop{color:#FF7086;border-color:#5A1528;background:#140308}
-.badge{margin-left:auto;font-size:11px;font-weight:600;letter-spacing:.7px;padding:7px 14px;border-radius:20px;background:#06110C;border:1px solid #2A5141;color:#68E5AD}
+button.clear{color:#8AB9FF;border-color:#2A3A55;background:#080C14}
+select{min-width:148px;appearance:none}
+.badge{margin-left:auto;font-size:11px;font-weight:600;padding:7px 13px;border-radius:18px;background:#06110C;border:1px solid #2A5141;color:#68E5AD;transition:all .2s}
 .badge.off{background:#110608;border-color:#4A2020;color:#FF7086}
-
-.hits-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
-.hits h2{font-size:11px;letter-spacing:1.8px;color:#6B6B78;font-weight:600}
+.hits-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.hits h2{font-size:11px;letter-spacing:1.7px;color:#6B6B78;font-weight:600}
 .hits-count{font-size:11px;color:#4CE0A0;font-weight:600}
-
-#hitlist{list-style:none;max-height:340px;overflow-y:auto;display:flex;flex-direction:column;gap:6px}
-#hitlist li{display:flex;justify-content:space-between;align-items:center;padding:13px 16px;background:rgba(8,8,12,.85);border:1px solid #1C1C24;border-radius:10px;font-family:'JetBrains Mono',monospace;animation:in .35s cubic-bezier(.16,1,.3,1)}
+#hitlist{list-style:none;max-height:360px;overflow-y:auto;display:flex;flex-direction:column;gap:6px}
+#hitlist li{display:flex;justify-content:space-between;align-items:center;padding:13px 15px;background:rgba(8,8,12,.9);border:1px solid #1C1C24;border-radius:11px;font-family:'JetBrains Mono',monospace;animation:in .32s ease;transition:border-color .2s,transform .2s}
+#hitlist li:hover{border-color:#FF0033;transform:translateX(3px)}
 @keyframes in{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
-.name{color:#4CE0A0;font-weight:700;font-size:14px;letter-spacing:1.1px}
+.name{color:#4CE0A0;font-weight:700;font-size:14px;letter-spacing:1.2px}
 .ms{color:#6B6B78;font-size:12px}
-.empty{text-align:center;padding:42px 20px;color:#4A4A55;font-size:13px}
-
-.toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%) translateY(80px);background:#0C0C10;border:1px solid #FF0033;color:#F2F2F7;padding:13px 22px;border-radius:12px;font-size:13px;font-weight:500;opacity:0;transition:all .4s cubic-bezier(.16,1,.3,1);z-index:50;pointer-events:none;box-shadow:0 12px 36px rgba(255,0,51,.25)}
+.empty{text-align:center;padding:44px 16px;color:#4A4A55;font-size:13px}
+.toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(80px);background:#0C0C10;border:1px solid #FF0033;padding:13px 22px;border-radius:12px;font-size:13px;opacity:0;transition:.4s cubic-bezier(.16,1,.3,1);z-index:50;pointer-events:none;box-shadow:0 12px 36px rgba(255,0,51,.28)}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
-
-@media(max-width:640px){.stats{grid-template-columns:1fr 1fr}.controls{flex-direction:column;align-items:stretch}.badge{margin-left:0;text-align:center}}
+@media(max-width:640px){.stats{grid-template-columns:1fr 1fr}.badge{margin-left:0}}
 </style>
 </head>
 <body>
@@ -401,9 +347,8 @@ button.stop{color:#FF7086;border-color:#5A1528;background:#140308}
   <div class="rail"></div>
   <header>
     <div class="brand">
-      <div class="logo" id="logo">
-        <!-- Si subes el gatito como static/icon.png se usa automáticamente -->
-        <img src="/static/icon.png" alt="Kernel" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+      <div class="logo">
+        <img src="/static/icon.png" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
         <span class="logo-fallback" style="display:none">K</span>
       </div>
       KERNEL
@@ -420,6 +365,15 @@ button.stop{color:#FF7086;border-color:#5A1528;background:#140308}
 
   <section class="controls">
     <button id="stop" class="stop">■  STOP</button>
+    <button id="clear" class="clear">CLEAR LIST</button>
+    <select id="bgSelect" title="Background">
+      <option value="0">Grid Flow</option>
+      <option value="1">Particles</option>
+      <option value="2">Aurora</option>
+      <option value="3">Hex Field</option>
+      <option value="4">Star Drift</option>
+      <option value="5">Ripple Orbs</option>
+    </select>
     <span class="badge off" id="badge">WEBHOOK OFF</span>
   </section>
 
@@ -434,142 +388,89 @@ button.stop{color:#FF7086;border-color:#5A1528;background:#140308}
 <div class="toast" id="toast"></div>
 
 <script>
-const canvas = document.getElementById('bg');
-const ctx = canvas.getContext('2d');
-let w, h, nodes = [], mouse = {x: -9999, y: -9999};
-
-function resize() {
-  w = canvas.width = innerWidth;
-  h = canvas.height = innerHeight;
-  nodes = [];
-  const gap = 52;
-  const cols = Math.ceil(w / gap) + 1;
-  const rows = Math.ceil(h / gap) + 1;
-  for (let y = 0; y < rows; y++)
-    for (let x = 0; x < cols; x++)
-      nodes.push({ ox: x * gap, oy: y * gap, x: x * gap, y: y * gap, phase: Math.random() * Math.PI * 2 });
+const canvas=document.getElementById('bg'),ctx=canvas.getContext('2d');
+let w,h,mode=0,mouse={x:-9999,y:-9999},t0=performance.now();
+let nodes=[],particles=[],stars=[],orbs=[];
+function resize(){w=canvas.width=innerWidth;h=canvas.height=innerHeight;initMode()}
+addEventListener('resize',resize);
+addEventListener('mousemove',e=>{mouse.x=e.clientX;mouse.y=e.clientY});
+addEventListener('mouseleave',()=>{mouse.x=-9999;mouse.y=-9999});
+function initMode(){
+  nodes=[];particles=[];stars=[];orbs=[];
+  if(mode===0){const g=52;for(let y=0;y<Math.ceil(h/g)+1;y++)for(let x=0;x<Math.ceil(w/g)+1;x++)nodes.push({ox:x*g,oy:y*g,x:x*g,y:y*g,phase:Math.random()*6.28})}
+  if(mode===1){for(let i=0;i<95;i++)particles.push({x:Math.random()*w,y:Math.random()*h,vx:(Math.random()-.5)*.45,vy:(Math.random()-.5)*.45,r:Math.random()*2+.5})}
+  if(mode===2){for(let i=0;i<5;i++)nodes.push({phase:Math.random()*6.28,speed:.25+Math.random().*.4,amp:35+Math.random()*55,y:h*(.18+i*.16)})}
+  if(mode===3){const g=40;for(let y=0;y<Math.ceil(h/g)+1;y++)for(let x=0;x<Math.ceil(w/g)+1;x++)nodes.push({ox:x*g+(y%2?g/2:0),oy:y*g*.86,x:0,y:0,phase:Math.random()*6.28})}
+  if(mode===4){for(let i=0;i<130;i++)stars.push({x:Math.random()*w,y:Math.random()*h,z:Math.random()*1.5+.3,s:Math.random()*1.6+.3})}
+  if(mode===5){for(let i=0;i<20;i++)orbs.push({x:Math.random()*w,y:Math.random()*h,r:18+Math.random()*42,vx:(Math.random()-.5)*.32,vy:(Math.random()-.5)*.32,phase:Math.random()*6.28})}
 }
-addEventListener('resize', resize);
-addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
-addEventListener('mouseleave', () => { mouse.x = -9999; mouse.y = -9999; });
-
-function draw(t) {
-  ctx.clearRect(0, 0, w, h);
-  const time = t * 0.001;
-  for (const n of nodes) {
-    n.x = n.ox + Math.sin(time * 0.65 + n.phase) * 5.5;
-    n.y = n.oy + Math.cos(time * 0.5 + n.phase * 1.2) * 4.5;
-    const dx = n.x - mouse.x, dy = n.y - mouse.y, dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist < 130) {
-      const f = (130 - dist) / 130;
-      n.x += (dx / dist) * f * 26;
-      n.y += (dy / dist) * f * 26;
-    }
+function draw(now){
+  const t=(now-t0)*0.001;ctx.clearRect(0,0,w,h);
+  if(mode===0){
+    for(const n of nodes){n.x=n.ox+Math.sin(t*.65+n.phase)*5;n.y=n.oy+Math.cos(t*.5+n.phase*1.2)*4;const dx=n.x-mouse.x,dy=n.y-mouse.y,d=Math.sqrt(dx*dx+dy*dy);if(d<130){const f=(130-d)/130;n.x+=(dx/d)*f*24;n.y+=(dy/d)*f*24}}
+    for(let i=0;i<nodes.length;i++){const a=nodes[i];for(let j=i+1;j<nodes.length;j++){const b=nodes[j],dx=a.x-b.x,dy=a.y-b.y,d=Math.sqrt(dx*dx+dy*dy);if(d<68){ctx.beginPath();ctx.strokeStyle=`rgba(255,0,51,${.12*(1-d/68)})`;ctx.lineWidth=.6;ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke()}}}
+    for(const n of nodes){const dx=n.x-mouse.x,dy=n.y-mouse.y,d=Math.sqrt(dx*dx+dy*dy),near=d<130;ctx.beginPath();ctx.arc(n.x,n.y,near?2.1:1.2,0,6.28);ctx.fillStyle=near?'rgba(255,40,80,.9)':'rgba(255,0,51,.3)';ctx.fill()}
   }
-  for (let i = 0; i < nodes.length; i++) {
-    const a = nodes[i];
-    for (let j = i + 1; j < nodes.length; j++) {
-      const b = nodes[j], dx = a.x - b.x, dy = a.y - b.y, d = Math.sqrt(dx * dx + dy * dy);
-      if (d < 68) {
-        ctx.beginPath();
-        ctx.strokeStyle = `rgba(255,0,51,${0.13 * (1 - d / 68)})`;
-        ctx.lineWidth = 0.65;
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-        ctx.stroke();
-      }
-    }
+  if(mode===1){
+    for(const p of particles){p.x+=p.vx;p.y+=p.vy;if(p.x<0||p.x>w)p.vx*=-1;if(p.y<0||p.y>h)p.vy*=-1;const dx=p.x-mouse.x,dy=p.y-mouse.y,d=Math.sqrt(dx*dx+dy*dy);if(d<100){p.vx-=(dx/d)*.15;p.vy-=(dy/d)*.15}ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,6.28);ctx.fillStyle='rgba(255,0,51,.55)';ctx.fill()}
+    for(let i=0;i<particles.length;i++)for(let j=i+1;j<particles.length;j++){const a=particles[i],b=particles[j],dx=a.x-b.x,dy=a.y-b.y,d=Math.sqrt(dx*dx+dy*dy);if(d<90){ctx.beginPath();ctx.strokeStyle=`rgba(255,0,51,${.1*(1-d/90)})`;ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke()}}
   }
-  for (const n of nodes) {
-    const dx = n.x - mouse.x, dy = n.y - mouse.y, dist = Math.sqrt(dx * dx + dy * dy), near = dist < 130;
-    ctx.beginPath();
-    ctx.arc(n.x, n.y, near ? 2.1 : 1.2, 0, Math.PI * 2);
-    ctx.fillStyle = near ? 'rgba(255,40,80,0.9)' : 'rgba(255,0,51,0.32)';
-    ctx.fill();
+  if(mode===2){
+    for(const b of nodes){ctx.beginPath();for(let x=0;x<=w;x+=6){const y=b.y+Math.sin(x*.008+t*b.speed+b.phase)*b.amp+Math.sin(x*.003-t*.2)*20;const dx=x-mouse.x,dy=y-mouse.y,d=Math.sqrt(dx*dx+dy*dy);const boost=d<160?(160-d)/160*25:0;x===0?ctx.moveTo(x,y-boost):ctx.lineTo(x,y-boost)}ctx.strokeStyle='rgba(255,0,51,.22)';ctx.lineWidth=2;ctx.stroke()}
+  }
+  if(mode===3){
+    for(const n of nodes){n.x=n.ox+Math.sin(t*.5+n.phase)*3;n.y=n.oy+Math.cos(t*.4+n.phase)*3;const dx=n.x-mouse.x,dy=n.y-mouse.y,d=Math.sqrt(dx*dx+dy*dy);if(d<120){const f=(120-d)/120;n.x+=(dx/d)*f*18;n.y+=(dy/d)*f*18}ctx.beginPath();ctx.arc(n.x,n.y,d<120?2.4:1.3,0,6.28);ctx.fillStyle=d<120?'rgba(255,50,90,.85)':'rgba(255,0,51,.28)';ctx.fill()}
+  }
+  if(mode===4){
+    for(const s of stars){s.x+=s.z*.15;if(s.x>w)s.x=0;const dx=s.x-mouse.x,dy=s.y-mouse.y,d=Math.sqrt(dx*dx+dy*dy);const bright=d<100?1:.4;ctx.beginPath();ctx.arc(s.x,s.y,s.s,0,6.28);ctx.fillStyle=`rgba(255,${40+bright*80},${60+bright*40},${.3+bright*.5})`;ctx.fill()}
+  }
+  if(mode===5){
+    for(const o of orbs){o.x+=o.vx;o.y+=o.vy;o.phase+=.01;if(o.x<0||o.x>w)o.vx*=-1;if(o.y<0||o.y>h)o.vy*=-1;const dx=o.x-mouse.x,dy=o.y-mouse.y,d=Math.sqrt(dx*dx+dy*dy);if(d<150){o.vx-=(dx/d)*.08;o.vy-=(dy/d)*.08}const r=o.r+Math.sin(o.phase)*6;const g=ctx.createRadialGradient(o.x,o.y,0,o.x,o.y,r);g.addColorStop(0,'rgba(255,0,51,.2)');g.addColorStop(1,'rgba(255,0,51,0)');ctx.beginPath();ctx.arc(o.x,o.y,r,0,6.28);ctx.fillStyle=g;ctx.fill()}
   }
   requestAnimationFrame(draw);
 }
-resize();
-requestAnimationFrame(draw);
+resize();requestAnimationFrame(draw);
+document.getElementById('bgSelect').onchange=e=>{mode=+e.target.value;initMode()};
 
-const $ = id => document.getElementById(id);
-const stateEl = $('state'), dot = $('dot'), checkedEl = $('checked'), availableEl = $('available');
-const intervalEl = $('interval'), uptimeEl = $('uptime'), stopBtn = $('stop');
-const hitlist = $('hitlist'), empty = $('empty'), hitsCount = $('hitsCount'), badge = $('badge'), toast = $('toast');
-let startTs = 0, hits = 0;
-
-function showToast(m) {
-  toast.textContent = m;
-  toast.classList.add('show');
-  setTimeout(() => toast.classList.remove('show'), 2800);
-}
-function fmt(s) {
-  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
-}
-function setRunning(on) {
-  stopBtn.disabled = !on;
-  dot.classList.toggle('on', on);
-  stateEl.style.color = on ? '#4CE0A0' : '#FF0033';
-}
-
-stopBtn.onclick = async () => {
-  await fetch('/api/stop', { method: 'POST' });
-  setRunning(false);
-  stateEl.textContent = 'STOPPED';
-  showToast('Hunt stopped');
-};
-
-const ws = new WebSocket((location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws');
-ws.onmessage = e => {
-  const d = JSON.parse(e.data);
-  if (d.type === 'hit') {
-    if (empty) empty.remove();
-    const li = document.createElement('li');
-    li.innerHTML = `<span class="name">${d.username}</span><span class="ms">${d.elapsed_ms} ms</span>`;
+const $=id=>document.getElementById(id);
+const stateEl=$('state'),dot=$('dot'),checkedEl=$('checked'),availableEl=$('available');
+const intervalEl=$('interval'),uptimeEl=$('uptime'),stopBtn=$('stop'),clearBtn=$('clear');
+const hitlist=$('hitlist'),hitsCount=$('hitsCount'),badge=$('badge'),toast=$('toast');
+let startTs=0,hits=0;
+function showToast(m){toast.textContent=m;toast.classList.add('show');setTimeout(()=>toast.classList.remove('show'),2800)}
+function fmt(s){return `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`}
+function setRunning(on){stopBtn.disabled=!on;dot.classList.toggle('on',on);stateEl.style.color=on?'#4CE0A0':'#FF0033'}
+stopBtn.onclick=async()=>{await fetch('/api/stop',{method:'POST'});setRunning(false);stateEl.textContent='STOPPED';showToast('Hunt stopped')};
+clearBtn.onclick=()=>{hitlist.innerHTML='<li class="empty" id="empty">List cleared</li>';hits=0;hitsCount.textContent='0 hits';showToast('List cleared')};
+const ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/ws');
+ws.onmessage=e=>{
+  const d=JSON.parse(e.data);
+  if(d.type==='hit'){
+    const emptyEl=document.getElementById('empty');if(emptyEl)emptyEl.remove();
+    const li=document.createElement('li');
+    li.innerHTML=`<span class="name">${d.username}</span><span class="ms">${d.elapsed_ms} ms</span>`;
     hitlist.prepend(li);
-    availableEl.textContent = d.available.toLocaleString();
-    checkedEl.textContent = d.checked.toLocaleString();
-    hits++;
-    hitsCount.textContent = hits + ' hits';
-    showToast('Found: ' + d.username);
+    availableEl.textContent=d.available.toLocaleString();
+    checkedEl.textContent=d.checked.toLocaleString();
+    hits++;hitsCount.textContent=hits+' hits';showToast('Found: '+d.username);
   }
-  if (d.type === 'progress' || d.type === 'hello') {
-    checkedEl.textContent = (d.checked || 0).toLocaleString();
-    availableEl.textContent = (d.available || 0).toLocaleString();
-    if (d.interval) intervalEl.textContent = d.interval + 's';
-    if (d.status) {
-      stateEl.textContent = d.status;
-      stateEl.style.color = d.status === 'HUNTING' ? '#4CE0A0' : '#FF0033';
-    }
-    if (d.running !== undefined) setRunning(d.running);
+  if(d.type==='progress'||d.type==='hello'){
+    checkedEl.textContent=(d.checked||0).toLocaleString();
+    availableEl.textContent=(d.available||0).toLocaleString();
+    if(d.interval)intervalEl.textContent=d.interval+'s';
+    if(d.status){stateEl.textContent=d.status;stateEl.style.color=d.status==='HUNTING'?'#4CE0A0':'#FF0033'}
+    if(d.running!==undefined)setRunning(d.running);
   }
-  if (d.type === 'status') {
-    stateEl.textContent = d.status;
-    stateEl.style.color = d.status === 'HUNTING' ? '#4CE0A0' : '#F5BB58';
-    if (d.status !== 'HUNTING') setRunning(false);
-  }
+  if(d.type==='status'){stateEl.textContent=d.status;stateEl.style.color=d.status==='HUNTING'?'#4CE0A0':'#F5BB58';if(d.status!=='HUNTING')setRunning(false)}
 };
-
-setInterval(() => {
-  if (startTs) uptimeEl.textContent = fmt(Math.floor((Date.now() - startTs) / 1000));
-}, 1000);
-
-fetch('/api/status').then(r => r.json()).then(d => {
-  checkedEl.textContent = d.checked.toLocaleString();
-  availableEl.textContent = d.available.toLocaleString();
-  stateEl.textContent = d.status;
-  if (d.webhook_configured) {
-    badge.textContent = 'WEBHOOK ON';
-    badge.classList.remove('off');
-  } else {
-    badge.textContent = 'WEBHOOK OFF';
-    badge.classList.add('off');
-  }
-  if (d.running) {
-    setRunning(true);
-    startTs = Date.now() - (d.uptime * 1000);
-    stateEl.textContent = 'HUNTING';
-  }
+setInterval(()=>{if(startTs)uptimeEl.textContent=fmt(Math.floor((Date.now()-startTs)/1000))},1000);
+fetch('/api/status').then(r=>r.json()).then(d=>{
+  checkedEl.textContent=d.checked.toLocaleString();
+  availableEl.textContent=d.available.toLocaleString();
+  stateEl.textContent=d.status;
+  if(d.webhook_configured){badge.textContent='WEBHOOK ON';badge.classList.remove('off')}
+  else{badge.textContent='WEBHOOK OFF';badge.classList.add('off')}
+  if(d.running){setRunning(true);startTs=Date.now()-d.uptime*1000;stateEl.textContent='HUNTING'}
 });
 </script>
 </body>
@@ -581,7 +482,6 @@ fetch('/api/status').then(r => r.json()).then(d => {
 async def startup():
     load_persistence()
     Path("templates/index.html").write_text(INDEX_HTML, encoding="utf-8")
-    Path("static").mkdir(exist_ok=True)
     if not state.running:
         state.running = True
         state.last_status = "HUNTING"
